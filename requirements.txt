@@ -1,0 +1,13 @@
+# Phase 1 (data generation) needs only the standard library.
+# Listed below are the dependencies for later phases / the Modal training image.
+
+# --- Phase 1 final pass: real ManiSkill execution (GPU) ---
+# mani-skill>=3.0.0
+# torch
+
+# --- Phases 2-4: model inference + SDFT training (Modal, 80GB GPU) ---
+# transformers>=4.51        # Qwen3 support
+# trl>=0.12                 # GKDTrainer base for the SDFT fork
+# accelerate
+# vllm                      # fast on-policy rollouts during SDFT
+# datasets

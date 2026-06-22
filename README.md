@@ -111,7 +111,7 @@ later *only if* Phase 2 shows the model is over-fitting template phrasing.
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | 0 | Skill API JSON schemas | ✅ `schemas/` |
-| 1 | Templated data-gen from ManiSkill task definitions → `(instruction, state) → gold plan` pairs + sim validator (see *Where the prompts come from*) | ⬜ |
+| 1 | Templated data-gen → `(instruction, state) → gold plan` pairs, every plan executed & goal-verified. 800 examples in `data/` (`qwench/`, `python -m qwench.generate`). Uses a symbolic executor now; ManiSkill executor swaps into step 4 for the GPU pass. | ✅ (symbolic) |
 | 2 | **Teacher-beats-student gate** — base Qwen3-8B with/without demo on held-out set | ⬜ (go/no-go) |
 | 3 | SFT baseline + general-capability eval (measure forgetting) | ⬜ |
 | 4 | SDFT trainer — fork TRL `GKDTrainer`: student rollouts → student & teacher (EMA + demo-in-prompt) forward passes → analytic per-token reverse-KL → EMA update | ⬜ |
