@@ -67,7 +67,7 @@ def load_tokenizer(model: str) -> AutoTokenizer:
 
 def load_model(cfg: TrainConfig):
     model = AutoModelForCausalLM.from_pretrained(
-        cfg.model, torch_dtype=torch.bfloat16, attn_implementation="flash_attention_2"
+        cfg.model, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
     )
     if cfg.use_lora:
         lora = LoraConfig(
