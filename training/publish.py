@@ -83,19 +83,28 @@ articulated, Push, Stack. No human labels, no API. See the repo for the generato
 
 ## Evaluation
 
-On the held-out split, graded by a **symbolic world-model executor** (parse → schema →
-execution → goal), the adapter reaches **100% plan-success**. Plan-success is also tracked
-per task family during training.
+Graded by a **symbolic world-model executor** (parse → schema → execution → goal):
+
+- **Plan-success on the full 132-example held-out split: ≈61%** (this checkpoint).
+- **MMLU (general capability): ≈0.71**, statistically unchanged from base Qwen3-8B (≈0.71) —
+  i.e. **no measurable forgetting** under this LoRA setup (see caveat below).
+
+> **Correction / honesty note.** An earlier version of this card reported "100% plan-success."
+> That figure was measured on the **64-example subset used for in-training eval**, which is
+> easier than the full split; on the full 132-example held-out the same checkpoint scores ~61%.
+> The checkpoint is also early (saved at the first in-training peak), so it under-fits the harder
+> task families (e.g. multi-step stacking).
 
 ## Limitations (read before relying on this)
 
 - **Symbolic grader, not a physics simulator.** Plans are validated against a symbolic world
   model, not ManiSkill or a real robot. Physical executability is **not** demonstrated.
-- **Templated task.** Instructions/scenes are templated; once output format is learned the task
-  is comparatively easy, so 100% does not imply hard-task generalization.
-- **Forgetting not yet measured.** SDFT's headline benefit is reduced catastrophic forgetting
-  vs. plain SFT; this adapter has **not** yet been compared against an SFT baseline on a
-  general-capability benchmark. Treat this as a method reproduction, not a SOTA claim.
+- **Templated task.** Instructions/scenes are templated; the task is comparatively easy once the
+  output format is learned.
+- **Forgetting not demonstrated *vs.* SFT.** Both SFT and SDFT leave MMLU essentially unchanged
+  here — expected, because LoRA trains ~1% of parameters and is inherently forgetting-resistant.
+  SDFT's anti-forgetting advantage is a **full fine-tuning** phenomenon and is **not** shown by
+  this LoRA adapter. Treat this as a method reproduction, not a SOTA claim.
 - Vocabulary is limited to the 8 skills above and the four task families.
 
 ## Citation

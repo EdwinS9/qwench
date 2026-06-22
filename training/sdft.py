@@ -189,7 +189,9 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
         model=model, args=args, data_collator=collate,
         train_dataset=train_rows,  # plain list of example dicts; collate() batches them
         callbacks=[EMACallback(),
-                   PlanEvalCallback(tok, heldout[:cfg.eval_examples], train_pool, cfg,
+                   # eval/checkpoint on the FULL heldout so sdft-best reflects true
+                   # held-out performance (not an easier 64-example subset).
+                   PlanEvalCallback(tok, heldout, train_pool, cfg,
                                     save_dir=best_dir, save_adapter=STUDENT_ADAPTER)],
     )
     trainer.train()
