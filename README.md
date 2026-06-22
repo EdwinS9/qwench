@@ -154,11 +154,15 @@ Auth: profile `build-small-hackathon` is already active in `~/.modal.toml`.
 ### Live training dashboard (Phases 3–4)
 
 Training streams to **Weights & Biases** in realtime; both SFT and SDFT log to the
-same project (`qwench-sdft`) so their curves overlay. One-time setup:
+same project (`qwench-sdft`) so their curves overlay. One-time setup — put your key
+in `.env`, then push it to a Modal secret the trainers read:
 
 ```
-modal secret create wandb-secret WANDB_API_KEY=<your-wandb-key>
+cp .env.example .env          # then paste your key from https://wandb.ai/authorize
+./scripts/push-secret.sh      # creates Modal secret `wandb-secret` from .env
 ```
+`.env` is gitignored. The trainers inject `wandb-secret` into the GPU container at
+runtime, so the key never lives in code or in the image.
 
 Launch (each prints a W&B run URL to watch from the browser):
 ```
