@@ -65,20 +65,62 @@ def load_tokenizer(model: str) -> AutoTokenizer:
     return tok
 
 
+def lora_config(cfg: TrainConfig) -> "LoraConfig":
+    return LoraConfig(
+        r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=0.05, task_type="CAUSAL_LM",
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
+    )
+
+
 def load_model(cfg: TrainConfig):
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
     )
     if cfg.use_lora:
-        lora = LoraConfig(
-            r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=0.05, task_type="CAUSAL_LM",
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                            "gate_proj", "up_proj", "down_proj"],
-        )
-        model = get_peft_model(model, lora)
+        model = get_peft_model(model, lora_config(cfg))  # creates the "default" (student) adapter
         model.print_trainable_parameters()
     model.config.use_cache = False
     return model
+
+
+STUDENT_ADAPTER = "default"
+TEACHER_ADAPTER = "teacher"
+
+
+def add_ema_teacher_adapter(model, cfg: TrainConfig):
+    """Add a second, frozen LoRA adapter on the SAME frozen base as the EMA teacher.
+
+    The student and teacher share the 16GB base weights — only their small LoRA
+    adapters differ — so SDFT no longer needs a full second model copy (~32GB of
+    weights -> ~17GB), letting it fit on a 40-48GB GPU. The teacher adapter is the
+    EMA of the student adapter; the SDFT trainer activates it (no grad) for the
+    teacher forward pass and updates it after each step.
+    """
+    if not cfg.use_lora:
+        raise ValueError("dual-adapter EMA teacher requires use_lora=True")
+    model.add_adapter(TEACHER_ADAPTER, lora_config(cfg))
+    # Only the student adapter trains; the teacher adapter is frozen and EMA-updated.
+    # add_adapter can re-mark trainability, so set both sides explicitly.
+    for name, p in model.named_parameters():
+        if "lora_" in name and f".{TEACHER_ADAPTER}." in name:
+            p.requires_grad_(False)
+        elif "lora_" in name and f".{STUDENT_ADAPTER}." in name:
+            p.requires_grad_(True)
+    model.set_adapter(STUDENT_ADAPTER)
+    sync_teacher_from_student(model, alpha=1.0)  # start teacher == student
+    return model
+
+
+@torch.no_grad()
+def sync_teacher_from_student(model, alpha: float):
+    """teacher ← (1-alpha)·teacher + alpha·student over the LoRA params. alpha=1 hard-copies."""
+    params = dict(model.named_parameters())
+    for name, p in params.items():
+        if "lora_" in name and f".{STUDENT_ADAPTER}." in name:
+            tname = name.replace(f".{STUDENT_ADAPTER}.", f".{TEACHER_ADAPTER}.")
+            if tname in params:
+                params[tname].mul_(1 - alpha).add_(p.detach(), alpha=alpha)
 
 
 # --- SFT data formatting ---------------------------------------------------

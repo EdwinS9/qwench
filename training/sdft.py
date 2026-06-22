@@ -42,8 +42,6 @@ hf_cache = modal.Volume.from_name("qwench-hf-cache", create_if_missing=True)
               volumes={"/root/.cache/huggingface": hf_cache},
               secrets=[modal.Secret.from_name("wandb-secret")])
 def train(limit: int, epochs: int, lr: float, ema_alpha: float):
-    import copy
-    import json
     import random
     import sys
 
@@ -55,8 +53,9 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
 
     from qwench.prompts import pick_demo, student_messages, teacher_messages
     from qwench.sdft_loss import analytic_token_kl
-    from training.common import (TrainConfig, PlanEvalCallback, load_examples,
-                                 load_model, load_tokenizer)
+    from training.common import (TrainConfig, PlanEvalCallback, STUDENT_ADAPTER,
+                                 TEACHER_ADAPTER, add_ema_teacher_adapter, load_examples,
+                                 load_model, load_tokenizer, sync_teacher_from_student)
 
     cfg = TrainConfig(method="sdft", epochs=epochs, lr=lr, ema_alpha=ema_alpha,
                       run_name="sdft", batch_size=4)
@@ -70,10 +69,9 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
         train_rows = train_rows[:limit]
     train_pool = load_examples("train")
     model = load_model(cfg)
+    # EMA teacher = a second frozen LoRA adapter on the SAME base (no full model copy).
+    add_ema_teacher_adapter(model, cfg)
     device = next(model.parameters()).device
-
-    # EMA teacher: frozen copy of the (LoRA) student, tracks it slowly.
-    ema = copy.deepcopy(model).eval().requires_grad_(False)
     rng = random.Random(cfg.seed)
 
     def response_logits(m, prompt_ids, cont_ids):
@@ -109,9 +107,11 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
                                                   add_generation_prompt=True)
                 t_pids = tok(t_prompt, add_special_tokens=False).input_ids
 
-                s_logits = response_logits(model, s_pids, cont_ids)          # grad
+                s_logits = response_logits(model, s_pids, cont_ids)          # student adapter, grad
                 with torch.no_grad():
-                    t_logits = response_logits(ema, t_pids, cont_ids)        # EMA teacher
+                    model.set_adapter(TEACHER_ADAPTER)                       # activate EMA teacher
+                    t_logits = response_logits(model, t_pids, cont_ids)
+                    model.set_adapter(STUDENT_ADAPTER)                       # restore student
                 n = min(s_logits.size(0), t_logits.size(0))
                 mask = torch.ones(1, n, device=device)
                 losses.append(analytic_token_kl(s_logits[:n].unsqueeze(0),
@@ -120,16 +120,9 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
             wandb.log({"train/sdft_reverse_kl": loss.item()}, step=self.state.global_step)
             return (loss, None) if return_outputs else loss
 
-    @torch.no_grad()
-    def ema_update():
-        a = cfg.ema_alpha
-        for p_ema, p in zip(ema.parameters(), model.parameters()):
-            if p.requires_grad:  # only the trainable (LoRA) params move
-                p_ema.mul_(1 - a).add_(p.detach(), alpha=a)
-
     class EMACallback(TrainerCallback):
         def on_step_end(self, args, state, control, **kw):
-            ema_update()
+            sync_teacher_from_student(model, alpha=cfg.ema_alpha)
 
     def collate(features):
         return {"batch": features}
