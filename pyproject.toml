@@ -22,7 +22,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-serve = ["vllm==0.6.3"]            # gate.py rollouts
 maniskill = ["mani-skill>=3.0.0"]  # planned real executor (not yet wired)
 dev = ["ruff"]
 

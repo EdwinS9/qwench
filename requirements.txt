@@ -1,7 +1,6 @@
 # Dependencies are declared in pyproject.toml. Install the project (editable) instead:
 #
-#   pip install -e .            # core: data-gen + training
-#   pip install -e .[serve]     # + vLLM, for the eval gate (eval/gate.py)
+#   pip install -e .            # core: data-gen + training + eval gate
 #   pip install -e .[dev]       # + ruff, for linting
 #
 # This file is kept only as a pointer; pyproject.toml is the source of truth.

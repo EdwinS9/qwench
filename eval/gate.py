@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("vllm==0.6.3", "transformers>=4.51", "torch")
+    .pip_install("transformers>=4.51", "torch", "accelerate")
     .add_local_dir(str(REPO / "qwench"), remote_path="/root/qwench")
     .add_local_dir(str(REPO / "schemas"), remote_path="/root/schemas")
 )
@@ -50,8 +50,8 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
     sys.path.insert(0, "/root")
     from collections import Counter
 
-    from transformers import AutoTokenizer
-    from vllm import LLM, SamplingParams
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from qwench.grade import grade
     from qwench.prompts import pick_demo, render_chat, student_messages, teacher_messages
@@ -59,21 +59,36 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
     if limit:
         heldout = heldout[:limit]
     rng = random.Random(0)
+    # Plain transformers generation (vLLM dropped — it lagged Qwen3 support). Same stack
+    # as training-eval, so the gate's numbers are directly comparable.
     tok = AutoTokenizer.from_pretrained(model)
-    llm = LLM(model=model, dtype="bfloat16", gpu_memory_utilization=0.9, max_model_len=4096)
-    sampling = SamplingParams(temperature=0.0, max_tokens=384)
+    if tok.pad_token is None:
+        tok.pad_token = tok.eos_token
+    tok.padding_side = "left"  # required for correct batched decoder generation
+    lm = AutoModelForCausalLM.from_pretrained(
+        model, torch_dtype=torch.bfloat16, attn_implementation="sdpa"
+    ).to("cuda").eval()
 
-    student_prompts = [render_chat(tok, student_messages(ex)) for ex in heldout]
-    teacher_prompts = [render_chat(tok, teacher_messages(ex, pick_demo(ex, train, rng)))
-                       for ex in heldout]
+    @torch.no_grad()
+    def generate(prompts: list[str], batch_size: int = 16) -> list[str]:
+        out = []
+        for i in range(0, len(prompts), batch_size):
+            enc = tok(prompts[i:i + batch_size], return_tensors="pt", padding=True,
+                      add_special_tokens=False).to("cuda")
+            gen = lm.generate(**enc, max_new_tokens=384, do_sample=False,
+                              use_cache=True, pad_token_id=tok.pad_token_id)
+            prompt_len = enc.input_ids.shape[1]  # left-padded, so identical across the batch
+            out.extend(tok.decode(row[prompt_len:], skip_special_tokens=True) for row in gen)
+        return out
 
-    student_out = llm.generate(student_prompts, sampling)
-    teacher_out = llm.generate(teacher_prompts, sampling)
+    student_out = generate([render_chat(tok, student_messages(ex)) for ex in heldout])
+    teacher_out = generate([render_chat(tok, teacher_messages(ex, pick_demo(ex, train, rng)))
+                            for ex in heldout])
 
     def score(outputs):
         succ, stages = 0, Counter()
-        for ex, o in zip(heldout, outputs, strict=True):
-            v = grade(ex, o.outputs[0].text)
+        for ex, text in zip(heldout, outputs, strict=True):
+            v = grade(ex, text)
             succ += int(v["success"])
             stages[v["stage"]] += 1
         return succ / len(heldout), stages
