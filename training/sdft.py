@@ -63,6 +63,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
         TrainConfig,
         add_ema_teacher_adapter,
         define_wandb_metrics,
+        generate_batched,
         load_examples,
         load_model,
         load_tokenizer,
@@ -92,52 +93,51 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
         def _prepare_inputs(self, inputs):
             return inputs  # raw example dicts, not tensors
 
-        @torch.no_grad()
-        def _rollout(self, ex):
-            # On-policy sampling must come from the student; assert it self-sufficiently
-            # rather than rely on whatever adapter the previous step left active.
-            self.model.set_adapter(STUDENT_ADAPTER)
-            pids = tok(render_chat(tok, student_messages(ex)), add_special_tokens=False).input_ids
-            inp = torch.tensor([pids], device=next(self.model.parameters()).device)
-            # use_cache is False during training; enable it for generation or each rollout
-            # recomputes full attention per token (orders of magnitude slower).
-            gen = self.model.generate(inp, max_new_tokens=cfg.max_new_tokens, do_sample=True,
-                                      temperature=1.0, top_p=0.95, use_cache=True,
-                                      pad_token_id=tok.pad_token_id)
-            return pids, gen[0, len(pids):].tolist()
-
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
             # Run rollout AND student scoring with dropout disabled (eval mode), so the
             # optimized distribution matches the on-policy sampling distribution and the
             # teacher targets. eval() disables LoRA dropout without blocking gradients.
             was_training = model.training
             model.eval()
+            batch = inputs["batch"]
             losses, cont_lens = [], []
-            n_batch = len(inputs["batch"])
             try:
-                for ex in inputs["batch"]:
-                    s_pids, cont_ids = self._rollout(ex)
-                    if not cont_ids:
-                        continue
-                    demo = pick_demo(ex, train_pool, rng)
-                    t_pids = tok(render_chat(tok, teacher_messages(ex, demo)),
-                                 add_special_tokens=False).input_ids
+                # 1. ROLLOUT — sample all plans in the micro-batch at once (student adapter).
+                model.set_adapter(STUDENT_ADAPTER)
+                prompts = [render_chat(tok, student_messages(ex)) for ex in batch]
+                conts = generate_batched(model, tok, prompts, max_new_tokens=cfg.max_new_tokens,
+                                         do_sample=True, temperature=1.0, top_p=0.95,
+                                         batch_size=len(batch))
+                # keep only examples that produced a non-empty rollout
+                items = [(tok(p, add_special_tokens=False).input_ids, c, ex)
+                         for p, c, ex in zip(prompts, conts, batch, strict=True) if c]
 
-                    s_logits = response_logits(model, s_pids, cont_ids, cfg.max_len)  # grad flows
-                    try:
-                        model.set_adapter(TEACHER_ADAPTER)                # activate EMA teacher
-                        with torch.no_grad():
-                            t_logits = response_logits(model, t_pids, cont_ids, cfg.max_len)
-                    finally:
-                        model.set_adapter(STUDENT_ADAPTER)                # always restore student
-                    if s_logits is None or t_logits is None:
-                        warnings.warn(f"skipped example: continuation ({len(cont_ids)} toks) "
+                # 2. STUDENT scoring (grad flows) — student adapter is active.
+                s_logits = [response_logits(model, pids, c, cfg.max_len) for pids, c, _ in items]
+
+                # 3. TEACHER scoring (no grad) — one adapter swap for the whole batch.
+                t_pids = []
+                for _, _, ex in items:
+                    demo = pick_demo(ex, train_pool, rng)
+                    t_prompt = render_chat(tok, teacher_messages(ex, demo))
+                    t_pids.append(tok(t_prompt, add_special_tokens=False).input_ids)
+                try:
+                    model.set_adapter(TEACHER_ADAPTER)
+                    with torch.no_grad():
+                        t_logits = [response_logits(model, tp, c, cfg.max_len)
+                                    for tp, (_, c, _) in zip(t_pids, items, strict=True)]
+                finally:
+                    model.set_adapter(STUDENT_ADAPTER)
+
+                # 4. LOSS — analytic per-token reverse KL, per example.
+                for (_, c, _), sl, tl in zip(items, s_logits, t_logits, strict=True):
+                    if sl is None or tl is None:
+                        warnings.warn(f"skipped example: continuation ({len(c)} toks) "
                                       f"exceeds max_len={cfg.max_len}", stacklevel=2)
                         continue
-                    mask = torch.ones(1, len(cont_ids), device=s_logits.device)
-                    losses.append(analytic_token_kl(s_logits.unsqueeze(0),
-                                                    t_logits.unsqueeze(0), mask))
-                    cont_lens.append(len(cont_ids))
+                    mask = torch.ones(1, len(c), device=sl.device)
+                    losses.append(analytic_token_kl(sl.unsqueeze(0), tl.unsqueeze(0), mask))
+                    cont_lens.append(len(c))
             finally:
                 if was_training:
                     model.train()
@@ -152,7 +152,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
             self._last_kl = loss.item()
             # Cheap per-step diagnostics so the dashboard has smooth curves between evals.
             self._step_metrics = {
-                "rollout/usable_frac": len(losses) / max(n_batch, 1),
+                "rollout/usable_frac": len(losses) / max(len(batch), 1),
                 "rollout/cont_len_mean": (sum(cont_lens) / len(cont_lens)) if cont_lens else 0.0,
             }
             return (loss, None) if return_outputs else loss

@@ -25,6 +25,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 from qwench.grade import grade
 from qwench.prompts import pick_demo, render_chat, student_messages, teacher_messages
 from qwench.sdft_loss import analytic_token_kl
+from training.genutil import trim_to_first_eos
 
 REPO_REMOTE = "/root"  # where the repo is mounted inside the Modal image
 
@@ -147,6 +148,42 @@ def response_logits(model, prompt_ids: list[int], cont_ids: list[int], max_len: 
     return out
 
 
+@torch.no_grad()
+def generate_batched(model, tok, prompts: list[str], *, max_new_tokens: int,
+                     do_sample: bool, temperature: float = 1.0, top_p: float = 0.95,
+                     batch_size: int = 16) -> list[list[int]]:
+    """Generate for many prompts at once; return each continuation's token ids.
+
+    Batches generation (the autoregressive bottleneck) instead of one prompt at a time,
+    which is the dominant cost in both the SDFT rollout and eval. Uses left padding (the
+    only correct side for decoder generation) and trims each row to the first EOS so a
+    finished-early sequence doesn't carry padding into downstream scoring/decoding.
+    """
+    device = next(model.parameters()).device
+    eos = tok.eos_token_id
+    gen_kwargs: dict[str, Any] = {"max_new_tokens": max_new_tokens, "use_cache": True,
+                                  "pad_token_id": tok.pad_token_id}
+    if do_sample:
+        gen_kwargs.update(do_sample=True, temperature=temperature, top_p=top_p)
+    else:
+        gen_kwargs["do_sample"] = False
+
+    prev_side = tok.padding_side
+    tok.padding_side = "left"  # decoder generation requires left padding
+    try:
+        out: list[list[int]] = []
+        for k in range(0, len(prompts), batch_size):
+            chunk = prompts[k:k + batch_size]
+            enc = tok(chunk, return_tensors="pt", padding=True,
+                      add_special_tokens=False).to(device)
+            gen = model.generate(**enc, **gen_kwargs)
+            for row in gen[:, enc.input_ids.shape[1]:].tolist():  # left-padded → prompt len uniform
+                out.append(trim_to_first_eos(row, eos))
+    finally:
+        tok.padding_side = prev_side
+    return out
+
+
 # --- SFT data formatting ---------------------------------------------------
 def to_prompt_completion(tok, example: dict[str, Any]) -> dict[str, str]:
     """Prompt-completion pair for TRL SFTTrainer (prompt tokens are auto-masked)."""
@@ -206,17 +243,15 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
     """
     from collections import Counter
 
-    device = next(model.parameters()).device
     succ, stages = 0, Counter()
     fam_succ, fam_total = Counter(), Counter()
     samples = []
     model.eval()
-    for i, ex in enumerate(examples):
-        prompt = render_chat(tok, student_messages(ex))
-        ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(device)
-        gen = model.generate(**ids, max_new_tokens=cfg.max_new_tokens, do_sample=False,
-                             use_cache=True, pad_token_id=tok.pad_token_id)
-        text = tok.decode(gen[0, ids.input_ids.size(1):], skip_special_tokens=True)
+    prompts = [render_chat(tok, student_messages(ex)) for ex in examples]
+    conts = generate_batched(model, tok, prompts, max_new_tokens=cfg.max_new_tokens,
+                             do_sample=False)
+    for i, (ex, cont) in enumerate(zip(examples, conts, strict=True)):
+        text = tok.decode(cont, skip_special_tokens=True)
         v = grade(ex, text)
         fam = ex["task_family"]
         succ += int(v["success"])
