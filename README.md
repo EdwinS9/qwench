@@ -84,12 +84,34 @@ SayCan / Code-as-Policies.
 
 ---
 
+## Where the prompts come from
+
+Each training example is `(instruction, scene_state) → gold_plan`. The input is the prompt; the
+gold plan is the target. None of it is hand-labeled and there is no API dependency — **ManiSkill
+is both the source and the grader.**
+
+- **`scene_state`** — read from ManiSkill ground truth (object poses, on-relations, articulation,
+  gripper, reachability) by a small **state extractor**, serialized to `schemas/scene_state.json`.
+- **`gold_plan`** — **constructed procedurally** from each task's `(initial state → goal condition)`
+  by a tiny per-family solver, then **executed in the sim and kept only if the goal is reached.**
+  We do not ask a model to guess plans.
+- **`instruction`** — **templated paraphrases** of the task goal (e.g. "put the red cube in the
+  bin" / "drop the cube into the bin"), templates × task object names for language variety.
+
+**Task families (all four):** PickAndPlace · Open/Close articulated · Push · Stack/multi-object.
+**Language:** pure templates first (deterministic, no API); add a one-shot LLM paraphrase pass
+later *only if* Phase 2 shows the model is over-fitting template phrasing.
+
+> Known limits: template phrasing can be rigid (mitigation: optional LLM paraphrase pass), and
+> coverage is bounded by ManiSkill tasks + the 8-skill vocabulary. Fine for learning the method;
+> not an open-world planner.
+
 ## Plan of record
 
 | Phase | Deliverable | Status |
 |-------|-------------|--------|
 | 0 | Skill API JSON schemas | ✅ `schemas/` |
-| 1 | Templated data-gen from ManiSkill task definitions → `(instruction, state) → gold plan` pairs + sim validator | ⬜ |
+| 1 | Templated data-gen from ManiSkill task definitions → `(instruction, state) → gold plan` pairs + sim validator (see *Where the prompts come from*) | ⬜ |
 | 2 | **Teacher-beats-student gate** — base Qwen3-8B with/without demo on held-out set | ⬜ (go/no-go) |
 | 3 | SFT baseline + general-capability eval (measure forgetting) | ⬜ |
 | 4 | SDFT trainer — fork TRL `GKDTrainer`: student rollouts → student & teacher (EMA + demo-in-prompt) forward passes → analytic per-token reverse-KL → EMA update | ⬜ |
