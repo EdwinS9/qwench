@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parent.parent
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("transformers>=4.51", "trl>=0.12", "peft", "accelerate",
+    .pip_install("transformers>=4.51", "trl>=1.0", "peft", "accelerate",
                  "datasets", "wandb", "torch")
     .add_local_dir(str(REPO / "qwench"), remote_path="/root/qwench")
     .add_local_dir(str(REPO / "schemas"), remote_path="/root/schemas")
@@ -71,11 +71,11 @@ def train(limit: int, epochs: int, lr: float):
         output_dir="/root/checkpoints/sft", num_train_epochs=cfg.epochs,
         per_device_train_batch_size=cfg.batch_size, gradient_accumulation_steps=cfg.grad_accum,
         learning_rate=cfg.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
-        logging_steps=1, bf16=True, max_seq_length=cfg.max_len,
+        logging_steps=1, bf16=True, max_length=cfg.max_len,  # trl>=1.0 renamed max_seq_length
         report_to="wandb", run_name=cfg.run_name, save_strategy="no",
     )
     trainer = SFTTrainer(
-        model=model, args=sft_cfg, train_dataset=ds,
+        model=model, args=sft_cfg, train_dataset=ds, processing_class=tok,
         callbacks=[PlanEvalCallback(tok, heldout[:cfg.eval_examples], load_examples("train"), cfg)],
     )
     trainer.train()
