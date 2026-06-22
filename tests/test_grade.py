@@ -14,6 +14,7 @@ sys.path.insert(0, str(ROOT))
 
 from qwench.grade import grade
 from qwench.prompts import pick_demo, student_messages, teacher_messages
+from qwench.skills import PlanInvalid, extract_json_object, parse_and_validate
 
 
 def _load(name):
@@ -70,8 +71,38 @@ def test_grade_failure_stages():
     assert v["stage"] == "goal" and not v["success"], v
 
 
+_PLAN = '{"thinking": "go then place", "plan": [{"skill": "done", "args": {}}]}'
+
+
+def test_lenient_json_extraction():
+    # bare object
+    assert parse_and_validate(_PLAN)[-1]["skill"] == "done"
+    # wrapped in a markdown code fence
+    assert parse_and_validate(f"```json\n{_PLAN}\n```") is not None
+    # preceded by a Qwen3 <think> block (even one containing braces/quotes)
+    assert parse_and_validate(f'<think>I should emit {{"x": 1}}</think>\n{_PLAN}') is not None
+    # surrounding prose
+    assert parse_and_validate(f"Sure, here is the plan:\n{_PLAN}\nHope that helps!") is not None
+    # braces inside string values must not confuse the brace scanner
+    tricky = '{"thinking": "use { and } carefully", "plan": [{"skill": "done", "args": {}}]}'
+    assert parse_and_validate(tricky) is not None
+    # a decoy non-plan object before the real plan must not mask it
+    assert parse_and_validate(f'Scene: {{"obj": 1}} then plan: {_PLAN}') is not None
+    # a truncated unclosed <think> with a brace inside, no real plan -> clean failure
+    # (not grabbing the non-plan object inside the reasoning)
+    for bad in ["no json here", "", "<think>only thinking, no answer</think>",
+                '<think>I will output {"skill": "pick"} then']:
+        try:
+            parse_and_validate(bad)
+        except PlanInvalid:
+            continue
+        raise AssertionError(f"expected PlanInvalid for {bad!r}")
+    assert extract_json_object("no braces") is None
+
+
 if __name__ == "__main__":
     test_gold_plans_grade_success()
     test_prompts_build()
     test_grade_failure_stages()
+    test_lenient_json_extraction()
     print("ok")

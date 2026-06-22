@@ -69,6 +69,22 @@ def teacher_messages(example: dict[str, Any], demo: dict[str, Any]) -> list[dict
     ]
 
 
+def render_chat(tok, messages: list[dict[str, str]]) -> str:
+    """Render messages for generation with Qwen3 'thinking' mode disabled.
+
+    Qwen3 defaults to emitting a `<think>...</think>` block before its answer. We want
+    the model's reasoning inside the JSON `thinking` field instead — a separate think
+    block would break strict JSON parsing and waste rollout tokens. `enable_thinking` is
+    a Qwen-specific template kwarg; it is harmlessly ignored by non-Qwen templates.
+
+    Single source of truth for prompt rendering, so the gate, SFT, and SDFT all tokenize
+    student/teacher prompts identically.
+    """
+    return tok.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+    )
+
+
 def pick_demo(
     example: dict[str, Any], pool: list[dict[str, Any]], rng: random.Random
 ) -> dict[str, Any]:

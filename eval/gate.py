@@ -54,20 +54,18 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
     from vllm import LLM, SamplingParams
 
     from qwench.grade import grade
-    from qwench.prompts import pick_demo, student_messages, teacher_messages
+    from qwench.prompts import pick_demo, render_chat, student_messages, teacher_messages
 
     if limit:
         heldout = heldout[:limit]
     rng = random.Random(0)
     tok = AutoTokenizer.from_pretrained(model)
     llm = LLM(model=model, dtype="bfloat16", gpu_memory_utilization=0.9, max_model_len=4096)
-    sampling = SamplingParams(temperature=0.0, max_tokens=512)
+    sampling = SamplingParams(temperature=0.0, max_tokens=384)
 
-    def render(messages):
-        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
-    student_prompts = [render(student_messages(ex)) for ex in heldout]
-    teacher_prompts = [render(teacher_messages(ex, pick_demo(ex, train, rng))) for ex in heldout]
+    student_prompts = [render_chat(tok, student_messages(ex)) for ex in heldout]
+    teacher_prompts = [render_chat(tok, teacher_messages(ex, pick_demo(ex, train, rng)))
+                       for ex in heldout]
 
     student_out = llm.generate(student_prompts, sampling)
     teacher_out = llm.generate(teacher_prompts, sampling)

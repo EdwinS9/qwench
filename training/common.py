@@ -23,7 +23,7 @@ from peft import LoraConfig, get_peft_model
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 
 from qwench.grade import grade
-from qwench.prompts import pick_demo, student_messages, teacher_messages
+from qwench.prompts import pick_demo, render_chat, student_messages, teacher_messages
 from qwench.sdft_loss import analytic_token_kl
 
 REPO_REMOTE = "/root"  # where the repo is mounted inside the Modal image
@@ -38,7 +38,7 @@ class TrainConfig:
     batch_size: int = 16
     grad_accum: int = 1
     max_len: int = 2048
-    max_new_tokens: int = 512
+    max_new_tokens: int = 384       # longest gold plan ~220 tokens; ceiling, model stops at EOS
     # LoRA (default, fits one 80GB GPU). Set use_lora=False for full FT (needs more GPU).
     use_lora: bool = True
     lora_r: int = 32
@@ -150,9 +150,7 @@ def response_logits(model, prompt_ids: list[int], cont_ids: list[int], max_len: 
 # --- SFT data formatting ---------------------------------------------------
 def to_prompt_completion(tok, example: dict[str, Any]) -> dict[str, str]:
     """Prompt-completion pair for TRL SFTTrainer (prompt tokens are auto-masked)."""
-    prompt = tok.apply_chat_template(
-        student_messages(example), tokenize=False, add_generation_prompt=True
-    )
+    prompt = render_chat(tok, student_messages(example))
     completion = json.dumps(example["target"]) + tok.eos_token
     return {"prompt": prompt, "completion": completion}
 
@@ -168,15 +166,14 @@ def _gold_continuation_kl_gap(model, tok, examples, train_pool, rng, max_len):
     SAME analytic_token_kl estimator as the training loss, so the number is comparable
     across SFT and SDFT.
     """
-    def render(messages):
-        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
     gaps = []
     for ex in examples:
         demo = pick_demo(ex, train_pool, rng)
-        cont_ids = tok(json.dumps(ex["target"]) + tok.eos_token, add_special_tokens=False).input_ids
-        s_pids = tok(render(student_messages(ex)), add_special_tokens=False).input_ids
-        t_pids = tok(render(teacher_messages(ex, demo)), add_special_tokens=False).input_ids
+        cont = json.dumps(ex["target"]) + tok.eos_token
+        cont_ids = tok(cont, add_special_tokens=False).input_ids
+        s_pids = tok(render_chat(tok, student_messages(ex)), add_special_tokens=False).input_ids
+        t_pids = tok(render_chat(tok, teacher_messages(ex, demo)),
+                     add_special_tokens=False).input_ids
 
         s = response_logits(model, s_pids, cont_ids, max_len)
         t = response_logits(model, t_pids, cont_ids, max_len)
@@ -215,9 +212,7 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
     samples = []
     model.eval()
     for i, ex in enumerate(examples):
-        prompt = tok.apply_chat_template(
-            student_messages(ex), tokenize=False, add_generation_prompt=True
-        )
+        prompt = render_chat(tok, student_messages(ex))
         ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(device)
         gen = model.generate(**ids, max_new_tokens=cfg.max_new_tokens, do_sample=False,
                              use_cache=True, pad_token_id=tok.pad_token_id)

@@ -54,7 +54,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
     import wandb
     from transformers import Trainer, TrainerCallback, TrainingArguments
 
-    from qwench.prompts import pick_demo, student_messages, teacher_messages
+    from qwench.prompts import pick_demo, render_chat, student_messages, teacher_messages
     from qwench.sdft_loss import analytic_token_kl
     from training.common import (
         STUDENT_ADAPTER,
@@ -97,9 +97,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
             # On-policy sampling must come from the student; assert it self-sufficiently
             # rather than rely on whatever adapter the previous step left active.
             self.model.set_adapter(STUDENT_ADAPTER)
-            prompt = tok.apply_chat_template(student_messages(ex), tokenize=False,
-                                            add_generation_prompt=True)
-            pids = tok(prompt, add_special_tokens=False).input_ids
+            pids = tok(render_chat(tok, student_messages(ex)), add_special_tokens=False).input_ids
             inp = torch.tensor([pids], device=next(self.model.parameters()).device)
             # use_cache is False during training; enable it for generation or each rollout
             # recomputes full attention per token (orders of magnitude slower).
@@ -122,9 +120,8 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
                     if not cont_ids:
                         continue
                     demo = pick_demo(ex, train_pool, rng)
-                    t_prompt = tok.apply_chat_template(teacher_messages(ex, demo), tokenize=False,
-                                                      add_generation_prompt=True)
-                    t_pids = tok(t_prompt, add_special_tokens=False).input_ids
+                    t_pids = tok(render_chat(tok, teacher_messages(ex, demo)),
+                                 add_special_tokens=False).input_ids
 
                     s_logits = response_logits(model, s_pids, cont_ids, cfg.max_len)  # grad flows
                     try:

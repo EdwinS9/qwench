@@ -11,8 +11,11 @@ constraints in schemas/plan.json + schemas/skills.json:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 _SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
@@ -75,10 +78,56 @@ def validate_plan(plan_obj: Any) -> list[dict[str, Any]]:
     return steps
 
 
+def _iter_json_objects(text: str):
+    """Yield each balanced top-level ``{...}`` substring, ignoring braces inside strings."""
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth, in_str, esc = 0, False, False
+        for j in range(i, n):
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield text[i:j + 1]
+                    break
+        else:
+            return  # unbalanced tail (e.g. a truncated generation) — no complete objects left
+        i = j + 1
+
+
+def extract_json_object(text: str) -> str | None:
+    """First balanced top-level JSON object (``<think>`` blocks stripped), or None."""
+    return next(_iter_json_objects(_THINK_BLOCK.sub("", text)), None)
+
+
 def parse_and_validate(text: str) -> list[dict[str, Any]]:
-    """Parse model output text as JSON and validate it. Raises PlanInvalid on failure."""
-    try:
-        obj = json.loads(text)
-    except json.JSONDecodeError as e:
-        raise PlanInvalid(f"not valid JSON: {e}") from e
-    return validate_plan(obj)
+    """Extract the plan object from a model generation and validate it. Raises PlanInvalid.
+
+    Tolerates the wrappers LLMs add — reasoning blocks, markdown fences, surrounding prose,
+    and a leading non-plan object — by scanning candidate JSON objects and selecting the
+    first that looks like a plan (has a ``plan`` key), so a decoy object cannot mask a valid
+    plan that follows. validate_plan still enforces the full schema, so locating the JSON
+    leniently never relaxes *what* is accepted (and a malformed plan reports its own error).
+    """
+    for raw in _iter_json_objects(_THINK_BLOCK.sub("", text)):
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict) and "plan" in obj:
+            return validate_plan(obj)
+    raise PlanInvalid("no JSON plan object found in output")
