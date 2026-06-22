@@ -3,10 +3,9 @@
 Reads the adapter saved to the `qwench-checkpoints` Modal volume and uploads it plus a
 model card to a private repo under your HF account.
 
-One-time setup — put a HF **write** token in `.env` (`HF_TOKEN=hf_...`), then push it into
-the Modal secret the function reads:
+One-time setup — create a dedicated Modal secret from your HF **write** token:
 
-    ./scripts/push-secret.sh
+    modal secret create hf-secret HF_TOKEN=hf_...
 
 Then publish (after a training run has saved an adapter):
 
@@ -114,7 +113,7 @@ per task family during training.
 
 
 @app.function(volumes={"/root/checkpoints": ckpts},
-              secrets=[modal.Secret.from_name("wandb-secret")])
+              secrets=[modal.Secret.from_name("hf-secret")])
 def publish(repo: str, src: str, private: bool):
     import os
 
