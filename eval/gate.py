@@ -14,8 +14,8 @@ Run:
     modal run eval/gate.py --limit 32       # quick smoke
     modal run eval/gate.py --model Qwen/Qwen3-14B
 
-Requires Modal auth (profile `build-small-hackathon` is already active) and, for
-gated weights, an `HF_TOKEN` secret. Qwen3 is open, so a token is usually optional.
+Requires Modal auth (run `modal token new` once) and, for gated weights, an `HF_TOKEN`
+secret. Qwen3 is open, so a token is usually optional.
 """
 
 from __future__ import annotations
@@ -50,8 +50,8 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
     sys.path.insert(0, "/root")
     from collections import Counter
 
-    from vllm import LLM, SamplingParams
     from transformers import AutoTokenizer
+    from vllm import LLM, SamplingParams
 
     from qwench.grade import grade
     from qwench.prompts import pick_demo, student_messages, teacher_messages
@@ -74,7 +74,7 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
 
     def score(outputs):
         succ, stages = 0, Counter()
-        for ex, o in zip(heldout, outputs):
+        for ex, o in zip(heldout, outputs, strict=True):
             v = grade(ex, o.outputs[0].text)
             succ += int(v["success"])
             stages[v["stage"]] += 1
@@ -96,15 +96,15 @@ def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | No
 @app.local_entrypoint()
 def main(model: str = "Qwen/Qwen3-8B", limit: int = 0):
     data = REPO / "data"
-    heldout = [json.loads(l) for l in (data / "heldout.jsonl").read_text().splitlines()]
-    train = [json.loads(l) for l in (data / "train.jsonl").read_text().splitlines()]
+    heldout = [json.loads(line) for line in (data / "heldout.jsonl").read_text().splitlines()]
+    train = [json.loads(line) for line in (data / "train.jsonl").read_text().splitlines()]
     result = run_gate.remote(model, heldout, train, limit or None)
     print(json.dumps(result, indent=2))
     print()
     if result["gate_passed"]:
-        print(f"✅ GATE PASSED — teacher beats student by {result['gap']:+.1%}. "
+        print(f"PASS: teacher beats student by {result['gap']:+.1%}. "
               "SDFT has a real teacher signal to distill; proceed to training.")
     else:
-        print(f"❌ GATE FAILED — teacher only {result['gap']:+.1%} over student "
-              f"(need ≥{PASS_MARGIN:.0%}). The in-context boost is too weak at this scale; "
+        print(f"FAIL: teacher only {result['gap']:+.1%} over student "
+              f"(need >= {PASS_MARGIN:.0%}). The in-context boost is too weak at this scale; "
               "do NOT start SDFT. Options: larger model, richer demos, or simpler tasks.")

@@ -62,15 +62,28 @@ def student_messages(example: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def teacher_messages(example: dict[str, Any], demo: dict[str, Any]) -> list[dict[str, str]]:
+    user = _demo_block(demo) + "\n\n" + _user_block(example["instruction"], example["scene_state"])
     return [
         {"role": "system", "content": SYSTEM},
-        {"role": "user",
-         "content": _demo_block(demo) + "\n\n" + _user_block(example["instruction"], example["scene_state"])},
+        {"role": "user", "content": user},
     ]
 
 
-def pick_demo(example: dict[str, Any], pool: list[dict[str, Any]], rng: random.Random) -> dict[str, Any]:
-    """Pick a same-family demonstration distinct from `example`."""
+def pick_demo(
+    example: dict[str, Any], pool: list[dict[str, Any]], rng: random.Random
+) -> dict[str, Any]:
+    """Pick an in-context demonstration: same task family, never `example` itself.
+
+    Returning the example would leak the gold target into the teacher prompt (trivially
+    correct teacher); a cross-family demo gives no teacher advantage. We therefore prefer
+    same-family, fall back to any *other* example, and fail loudly if neither exists —
+    rather than silently degrading the teacher signal the method depends on.
+    """
     same = [d for d in pool if d["task_family"] == example["task_family"]
             and d["instruction"] != example["instruction"]]
-    return rng.choice(same or pool)
+    if same:
+        return rng.choice(same)
+    others = [d for d in pool if d is not example and d["instruction"] != example["instruction"]]
+    if not others:
+        raise ValueError(f"no valid demo for an example in family {example['task_family']!r}")
+    return rng.choice(others)

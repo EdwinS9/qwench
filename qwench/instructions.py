@@ -21,7 +21,7 @@ _TEMPLATES = {
     "pick_and_place": [
         "put the {object} {relation} the {receptacle}",
         "place the {object} {relation} the {receptacle}",
-        "move the {object} into the {receptacle}" ,
+        "move the {object} {prep} the {receptacle}",
         "the {object} should go {relation} the {receptacle}",
     ],
     "open_close": [
@@ -41,12 +41,15 @@ _TEMPLATES = {
     ],
 }
 
-_VERB_PAST = {"open": "opened", "closed": "closed"}
+_VERB_PAST = {"open": "opened", "close": "closed"}
 
 
 def make_instruction(inst: Instance, rng: random.Random) -> str:
     tmpl = rng.choice(_TEMPLATES[inst.family])
     slots = {k: _readable(v) if isinstance(v, str) else v for k, v in inst.slots.items()}
+    if inst.family == "pick_and_place":
+        # Keep the natural "into/onto" phrasing consistent with the gold relation.
+        slots["prep"] = "into" if inst.slots["relation"] == "in" else "onto"
     if inst.family == "open_close":
         slots["verb_past"] = _VERB_PAST[inst.slots["verb"]]
     if inst.family == "stack":

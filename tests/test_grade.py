@@ -18,7 +18,7 @@ from qwench.prompts import pick_demo, student_messages, teacher_messages
 
 def _load(name):
     path = ROOT / "data" / f"{name}.jsonl"
-    return [json.loads(l) for l in path.read_text().splitlines()]
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def test_gold_plans_grade_success():
@@ -42,7 +42,36 @@ def test_prompts_build():
     assert sm[0]["content"] == tm[0]["content"]      # same system prompt
 
 
+def _ex(goal):
+    """Minimal gradable example: a cube on the counter, robot at the floor."""
+    return {
+        "goal": goal,
+        "scene_state": {
+            "objects": [{"id": "cube", "type": "graspable", "at": "counter"},
+                        {"id": "counter", "type": "surface"}],
+            "robot": {"base_at": "floor", "gripper": {"holding": None}},
+        },
+    }
+
+
+def _plan(*steps):
+    return json.dumps({"thinking": "", "plan": list(steps) + [{"skill": "done", "args": {}}]})
+
+
+def test_grade_failure_stages():
+    # not JSON -> parse/schema stage
+    assert grade(_ex([("at", "cube", "counter")]), "this is not json")["stage"] == "parse_or_schema"
+    # schema-valid but precondition violated (pick when base not at cube) -> execution stage
+    pick_plan = _plan({"skill": "pick", "args": {"object": "cube"}})
+    v = grade(_ex([("at", "cube", "counter")]), pick_plan)
+    assert v["stage"] == "execution", v
+    # parses + executes cleanly but goal unmet -> goal stage
+    v = grade(_ex([("at", "cube", "bin")]), _plan({"skill": "detect", "args": {"object": "cube"}}))
+    assert v["stage"] == "goal" and not v["success"], v
+
+
 if __name__ == "__main__":
     test_gold_plans_grade_success()
     test_prompts_build()
+    test_grade_failure_stages()
     print("ok")

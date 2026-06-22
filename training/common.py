@@ -3,7 +3,7 @@
 Holds everything the two trainers have in common so their metrics are directly
 comparable on the same W&B dashboard:
   - config, data loading, prompt/target formatting
-  - LoRA model loading (keeps full 8B + EMA teacher on one 80GB GPU)
+  - LoRA model loading (student + EMA-teacher adapters share one frozen base)
   - the realtime eval callback: plan-success %, failure-stage breakdown,
     teacher-student KL gap, and a table of sample generations
 
@@ -13,7 +13,7 @@ All heavy imports (torch/transformers/wandb) resolve inside the Modal image.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +24,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback
 
 from qwench.grade import grade
 from qwench.prompts import pick_demo, student_messages, teacher_messages
+from qwench.sdft_loss import analytic_token_kl
 
 REPO_REMOTE = "/root"  # where the repo is mounted inside the Modal image
 
@@ -55,7 +56,7 @@ class TrainConfig:
 
 def load_examples(split: str) -> list[dict[str, Any]]:
     path = Path(REPO_REMOTE) / "data" / f"{split}.jsonl"
-    return [json.loads(l) for l in path.read_text().splitlines()]
+    return [json.loads(line) for line in path.read_text().splitlines()]
 
 
 def load_tokenizer(model: str) -> AutoTokenizer:
@@ -65,7 +66,7 @@ def load_tokenizer(model: str) -> AutoTokenizer:
     return tok
 
 
-def lora_config(cfg: TrainConfig) -> "LoraConfig":
+def lora_config(cfg: TrainConfig) -> LoraConfig:
     return LoraConfig(
         r=cfg.lora_r, lora_alpha=cfg.lora_alpha, lora_dropout=0.05, task_type="CAUSAL_LM",
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -123,6 +124,29 @@ def sync_teacher_from_student(model, alpha: float):
                 params[tname].mul_(1 - alpha).add_(p.detach(), alpha=alpha)
 
 
+# --- scoring -----------------------------------------------------------------
+def response_logits(model, prompt_ids: list[int], cont_ids: list[int], max_len: int):
+    """Logits predicting each continuation token, given a prompt.
+
+    Left-truncates the PROMPT (never the continuation) when prompt+continuation exceed
+    `max_len`, so the returned logits always cover the full continuation — both roles
+    score exactly the same tokens. Returns None if the continuation alone exceeds
+    max_len (caller must skip, never contribute a spurious zero). Reads the device live
+    (the Trainer moves the model to GPU only at train() time).
+    """
+    keep = max_len - len(cont_ids)
+    if keep <= 0:
+        return None
+    pids = prompt_ids[-keep:] if len(prompt_ids) > keep else prompt_ids
+    device = next(model.parameters()).device
+    ids = torch.tensor([pids + cont_ids], device=device)
+    logits = model(ids).logits[0]
+    start = len(pids) - 1
+    out = logits[start:start + len(cont_ids)]
+    assert out.size(0) == len(cont_ids), (out.size(0), len(cont_ids))
+    return out
+
+
 # --- SFT data formatting ---------------------------------------------------
 def to_prompt_completion(tok, example: dict[str, Any]) -> dict[str, str]:
     """Prompt-completion pair for TRL SFTTrainer (prompt tokens are auto-masked)."""
@@ -135,36 +159,31 @@ def to_prompt_completion(tok, example: dict[str, Any]) -> dict[str, str]:
 
 # --- realtime metrics ------------------------------------------------------
 @torch.no_grad()
-def _gold_continuation_kl_gap(model, tok, examples, train_pool, rng, device, max_len):
+def _gold_continuation_kl_gap(model, tok, examples, train_pool, rng, max_len):
     """Mean token KL( student(·|x) ‖ teacher(·|x,c) ) over gold continuations.
 
     The paper's health signal: a demonstration-conditioned teacher should stay *close*
     to the student (low gap) while being more correct. SDFT should shrink this gap over
-    training; SFT need not. Computed with the *current* model in both roles so SFT and
-    SDFT log a comparable number.
+    training; SFT need not. Computed with the *current* model in both roles, through the
+    SAME analytic_token_kl estimator as the training loss, so the number is comparable
+    across SFT and SDFT.
     """
-    import torch.nn.functional as F
+    def render(messages):
+        return tok.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
     gaps = []
     for ex in examples:
         demo = pick_demo(ex, train_pool, rng)
-        s_prompt = tok.apply_chat_template(student_messages(ex), tokenize=False, add_generation_prompt=True)
-        t_prompt = tok.apply_chat_template(teacher_messages(ex, demo), tokenize=False, add_generation_prompt=True)
-        cont = json.dumps(ex["target"]) + tok.eos_token
-        cont_ids = tok(cont, add_special_tokens=False).input_ids
+        cont_ids = tok(json.dumps(ex["target"]) + tok.eos_token, add_special_tokens=False).input_ids
+        s_pids = tok(render(student_messages(ex)), add_special_tokens=False).input_ids
+        t_pids = tok(render(teacher_messages(ex, demo)), add_special_tokens=False).input_ids
 
-        def logits_for(prompt):
-            pids = tok(prompt, add_special_tokens=False).input_ids
-            ids = torch.tensor([pids + cont_ids], device=device)[:, :max_len]
-            out = model(ids).logits[0]
-            start = len(pids) - 1
-            return out[start:start + len(cont_ids)]  # logits predicting each cont token
-
-        s = logits_for(s_prompt)
-        t = logits_for(t_prompt)
-        n = min(s.size(0), t.size(0))
-        logp, logq = F.log_softmax(s[:n], -1), F.log_softmax(t[:n], -1)
-        gaps.append(((logp.exp() * (logp - logq)).sum(-1)).mean().item())
+        s = response_logits(model, s_pids, cont_ids, max_len)
+        t = response_logits(model, t_pids, cont_ids, max_len)
+        if s is None or t is None:
+            continue  # continuation exceeds budget — skip, do not record a spurious 0.0
+        mask = torch.ones(1, len(cont_ids), device=s.device)
+        gaps.append(analytic_token_kl(s.unsqueeze(0), t.unsqueeze(0), mask).item())
     return sum(gaps) / max(len(gaps), 1)
 
 
@@ -177,7 +196,9 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
     succ, stages, samples = 0, Counter(), []
     model.eval()
     for i, ex in enumerate(examples):
-        prompt = tok.apply_chat_template(student_messages(ex), tokenize=False, add_generation_prompt=True)
+        prompt = tok.apply_chat_template(
+            student_messages(ex), tokenize=False, add_generation_prompt=True
+        )
         ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(device)
         gen = model.generate(**ids, max_new_tokens=cfg.max_new_tokens, do_sample=False,
                              use_cache=True, pad_token_id=tok.pad_token_id)
@@ -189,7 +210,7 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
             samples.append([ex["task_family"], ex["instruction"], text[:600],
                             v["success"], v["stage"]])
     kl_gap = _gold_continuation_kl_gap(model, tok, examples[:cfg.n_samples_logged * 4],
-                                       train_pool, rng, device, cfg.max_len)
+                                       train_pool, rng, cfg.max_len)
     model.train()
     return {
         "eval/plan_success": succ / len(examples),
@@ -203,7 +224,10 @@ class PlanEvalCallback(TrainerCallback):
 
     def __init__(self, tok, eval_examples, train_pool, cfg: TrainConfig):
         import random
-        self.tok, self.eval_examples, self.train_pool, self.cfg = tok, eval_examples, train_pool, cfg
+        self.tok = tok
+        self.eval_examples = eval_examples
+        self.train_pool = train_pool
+        self.cfg = cfg
         self.rng = random.Random(cfg.seed)
 
     def on_step_end(self, args, state, control, model=None, **kw):

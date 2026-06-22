@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite both the repository and the SDFT paper it reimplements."
+title: "qwench: Self-Distillation Fine-Tuning of Qwen3-8B for robot skill planning"
+authors:
+  - family-names: Sam
+    given-names: Edwin
+license: Apache-2.0
+repository-code: "https://github.com/EdwinS9/qwench"
+references:
+  - type: article
+    title: "Self-Distillation Enables Continual Learning"
+    authors:
+      - family-names: Shenfeld
+        given-names: Idan
+      - family-names: Damani
+        given-names: Mehul
+      - family-names: Hübotter
+        given-names: Jonas
+      - family-names: Agrawal
+        given-names: Pulkit
+    year: 2026
+    notes: "arXiv:2601.19897"
+    url: "https://arxiv.org/abs/2601.19897"

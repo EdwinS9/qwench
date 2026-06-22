@@ -11,3 +11,11 @@ checkpoints/
 outputs/
 wandb/
 *.safetensors
+# linters / type-checkers
+.ruff_cache/
+.mypy_cache/
+# coverage
+.coverage
+htmlcov/
+# macOS
+.DS_Store

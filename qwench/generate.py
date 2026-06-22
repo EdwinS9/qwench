@@ -23,15 +23,16 @@ import argparse
 import json
 import random
 from pathlib import Path
+from typing import Any
 
 from .instructions import make_instruction, make_thinking
 from .skills import PlanInvalid, validate_plan
 from .solver import solve
-from .tasks import FAMILIES, generate_instances
+from .tasks import FAMILIES, Instance, generate_instances
 from .world import SkillError, execute_plan
 
 
-def build_record(inst, rng) -> dict | None:
+def build_record(inst: Instance, rng: random.Random) -> dict[str, Any] | None:
     """Return a verified training record, or None if the plan fails validation/execution."""
     plan = solve(inst)
     try:

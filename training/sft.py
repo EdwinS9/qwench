@@ -13,7 +13,6 @@ holding WANDB_API_KEY (see README "Live dashboard").
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import modal
@@ -45,8 +44,14 @@ def train(limit: int, epochs: int, lr: float):
     from datasets import Dataset
     from trl import SFTConfig, SFTTrainer
 
-    from training.common import (TrainConfig, PlanEvalCallback, load_examples,
-                                 load_model, load_tokenizer, to_prompt_completion)
+    from training.common import (
+        PlanEvalCallback,
+        TrainConfig,
+        load_examples,
+        load_model,
+        load_tokenizer,
+        to_prompt_completion,
+    )
 
     cfg = TrainConfig(method="sft", epochs=epochs, lr=lr, run_name="sft-baseline")
     wandb.init(project=cfg.wandb_project, name=cfg.run_name, config=cfg.__dict__,

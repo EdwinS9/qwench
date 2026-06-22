@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "qwench/schemas/skills.json",
   "title": "Robot Skill API",
-  "description": "Fixed set of high-level skill primitives the Qwen3-4B planner may call. Each skill maps to a ManiSkill controller (scripted or learned) at execution time. The planner emits a sequence of these calls; it never produces low-level actions (joint torques/poses).",
+  "description": "Fixed set of high-level skill primitives the Qwen3-8B planner may call. Each skill maps to a ManiSkill controller (scripted or learned) at execution time. The planner emits a sequence of these calls; it never produces low-level actions (joint torques/poses).",
   "skills": [
     {
       "name": "navigate_to",

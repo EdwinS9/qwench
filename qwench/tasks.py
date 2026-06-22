@@ -13,10 +13,11 @@ stays the same.
 from __future__ import annotations
 
 import random
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator
+from typing import Any
 
-from .world import ARTICULATED, GRASPABLE, LOCATION, RECEPTACLE, SURFACE
+from .world import ARTICULATED, GRASPABLE, LOCATION, RECEPTACLE, SURFACE, is_reachable
 
 # Vocabulary the templated scenes draw from.
 GRASPABLES = ["red_cube", "blue_cube", "green_cube", "yellow_block", "apple", "mug", "can"]
@@ -48,7 +49,7 @@ def _finalize(scene: dict[str, Any]) -> dict[str, Any]:
     """Fill informational `reachable` flags relative to the initial base pose."""
     base_at = scene["robot"]["base_at"]
     for o in scene["objects"]:
-        o["reachable"] = base_at == o["id"] or base_at == o.get("at")
+        o["reachable"] = is_reachable(base_at, o)
     return scene
 
 
@@ -58,19 +59,22 @@ def gen_pick_and_place(rng: random.Random) -> Instance:
     src = rng.choice(SURFACES)
     in_recep = rng.random() < 0.5
     recep = rng.choice(RECEPTACLES_IN if in_recep else RECEPTACLES_ON)
-    recep_loc = rng.choice([l for l in LOCATIONS if l != src]) if recep != "drawer" else "counter"
+    recep_loc = rng.choice([x for x in LOCATIONS if x != src]) if recep != "drawer" else "counter"
     relation = "in" if in_recep else "on"
     start = rng.choice(LOCATIONS)
 
     objects = [
         {"id": g, "type": GRASPABLE, "at": src},
+        # A drawer may start open or closed; the solver opens it when needed.
         {"id": recep, "type": ARTICULATED if recep == "drawer" else RECEPTACLE,
-         "at": recep_loc, **({"articulation": "open"} if recep == "drawer" else {})},
+         "at": recep_loc,
+         **({"articulation": rng.choice(["open", "closed"])} if recep == "drawer" else {})},
     ]
     for s in {src, recep_loc} & set(SURFACES):
         objects.append(_surface_obj(s))
     scene = _finalize({"objects": objects, "robot": _base_robot(start)})
-    return Instance("pick_and_place", scene, [("at", g, recep)],
+    # 4-tuple goal asserts the on/in relation, not just the location.
+    return Instance("pick_and_place", scene, [("at", g, recep, relation)],
                     {"object": g, "receptacle": recep, "relation": relation})
 
 
@@ -82,19 +86,20 @@ def gen_open_close(rng: random.Random) -> Instance:
     open_it = rng.random() < 0.5
     init_state = "closed" if open_it else "open"
     goal_state = "open" if open_it else "closed"
+    verb = "open" if open_it else "close"  # the skill name, distinct from the goal state
     objects = [{"id": a, "type": ARTICULATED, "at": loc, "articulation": init_state}]
     if loc in SURFACES:
         objects.append(_surface_obj(loc))
     scene = _finalize({"objects": objects, "robot": _base_robot(start)})
     return Instance("open_close", scene, [("articulation", a, goal_state)],
-                    {"object": a, "verb": goal_state})
+                    {"object": a, "verb": verb})
 
 
 # --- Push ------------------------------------------------------------------
 def gen_push(rng: random.Random) -> Instance:
     g = rng.choice(GRASPABLES)
     src = rng.choice(SURFACES)
-    dst = rng.choice([l for l in LOCATIONS if l != src])
+    dst = rng.choice([x for x in LOCATIONS if x != src])
     start = rng.choice(LOCATIONS)
     objects = [{"id": g, "type": GRASPABLE, "at": src}]
     for s in {src, dst} & set(SURFACES):

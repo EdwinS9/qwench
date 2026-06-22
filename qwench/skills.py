@@ -52,7 +52,9 @@ def validate_plan(plan_obj: Any) -> list[dict[str, Any]]:
         name = step["skill"]
         if name not in SKILLS:
             raise PlanInvalid(f"step {i}: unknown skill '{name}'")
-        args = step.get("args", {})
+        if "args" not in step:  # plan.json marks 'args' required, even for `done`
+            raise PlanInvalid(f"step {i} ({name}): missing 'args'")
+        args = step["args"]
         if not isinstance(args, dict):
             raise PlanInvalid(f"step {i}: 'args' must be an object")
         spec = SKILLS[name]

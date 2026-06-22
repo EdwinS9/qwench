@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from .tasks import Instance
+from .world import ARTICULATED
 
 
 def _step(skill: str, **args: Any) -> dict[str, Any]:
@@ -19,21 +20,25 @@ def _step(skill: str, **args: Any) -> dict[str, Any]:
 
 def _solve_pick_and_place(inst: Instance) -> list[dict[str, Any]]:
     s = inst.slots
-    return [
+    recep = next(o for o in inst.scene_state["objects"] if o["id"] == s["receptacle"])
+    steps = [
         _step("navigate_to", target=s["object"]),
         _step("pick", object=s["object"]),
         _step("navigate_to", target=s["receptacle"]),
-        _step("place", target=s["receptacle"], relation=s["relation"]),
-        _step("done"),
     ]
+    # An articulated receptacle (a drawer) must be opened before placing into it.
+    if recep["type"] == ARTICULATED and recep.get("articulation") != "open":
+        steps.append(_step("open", object=s["receptacle"]))
+    steps.append(_step("place", target=s["receptacle"], relation=s["relation"]))
+    steps.append(_step("done"))
+    return steps
 
 
 def _solve_open_close(inst: Instance) -> list[dict[str, Any]]:
-    s = inst.slots
-    verb = "open" if s["verb"] == "open" else "close"
+    s = inst.slots  # s["verb"] is already the skill name ("open" | "close")
     return [
         _step("navigate_to", target=s["object"]),
-        _step(verb, object=s["object"]),
+        _step(s["verb"], object=s["object"]),
         _step("done"),
     ]
 

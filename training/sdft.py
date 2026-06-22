@@ -7,8 +7,9 @@ Implements the paper's loop with a custom Trainer:
   3. LOSS     — analytic per-token reverse KL (qwench/sdft_loss.py).
   4. EMA      — after each optimizer step, teacher_weights ← (1-α)·teacher + α·student.
 
-Teacher = EMA copy of the student's LoRA adapter over the shared frozen base, with the
-demonstration in its prompt. LoRA keeps student + EMA teacher on one 80GB GPU.
+Teacher = a second frozen LoRA adapter (the EMA of the student adapter) over the SAME
+shared frozen base, with the demonstration in its prompt — so no full second model copy
+is held, and SDFT fits a 40-48GB GPU.
 
     modal run training/sdft.py                          # Qwen3-8B, LoRA, 2 epochs
     modal run training/sdft.py --limit 128 --epochs 1   # quick smoke
@@ -42,20 +43,31 @@ hf_cache = modal.Volume.from_name("qwench-hf-cache", create_if_missing=True)
               volumes={"/root/.cache/huggingface": hf_cache},
               secrets=[modal.Secret.from_name("wandb-secret")])
 def train(limit: int, epochs: int, lr: float, ema_alpha: float):
+    import logging
     import random
     import sys
+    import warnings
 
     sys.path.insert(0, "/root")
 
     import torch
     import wandb
-    from transformers import Trainer, TrainingArguments, TrainerCallback
+    from transformers import Trainer, TrainerCallback, TrainingArguments
 
     from qwench.prompts import pick_demo, student_messages, teacher_messages
     from qwench.sdft_loss import analytic_token_kl
-    from training.common import (TrainConfig, PlanEvalCallback, STUDENT_ADAPTER,
-                                 TEACHER_ADAPTER, add_ema_teacher_adapter, load_examples,
-                                 load_model, load_tokenizer, sync_teacher_from_student)
+    from training.common import (
+        STUDENT_ADAPTER,
+        TEACHER_ADAPTER,
+        PlanEvalCallback,
+        TrainConfig,
+        add_ema_teacher_adapter,
+        load_examples,
+        load_model,
+        load_tokenizer,
+        response_logits,
+        sync_teacher_from_student,
+    )
 
     cfg = TrainConfig(method="sdft", epochs=epochs, lr=lr, ema_alpha=ema_alpha,
                       run_name="sdft", batch_size=4)
@@ -72,16 +84,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
     # EMA teacher = a second frozen LoRA adapter on the SAME base (no full model copy).
     add_ema_teacher_adapter(model, cfg)
     rng = random.Random(cfg.seed)
-
-    def response_logits(m, prompt_ids, cont_ids):
-        """Logits predicting each continuation token, given a prompt."""
-        # Read the live device: the Trainer moves the model to GPU only at train() time,
-        # so the device must NOT be captured at setup (it would still be 'cpu' there).
-        device = next(m.parameters()).device
-        ids = torch.tensor([prompt_ids + cont_ids], device=device)[:, :cfg.max_len]
-        logits = m(ids).logits[0]
-        start = len(prompt_ids) - 1
-        return logits[start:start + len(cont_ids)]  # [len(cont), V]
+    log = logging.getLogger("qwench.sdft")
 
     class SDFTTrainer(Trainer):
         def _prepare_inputs(self, inputs):
@@ -89,47 +92,71 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
 
         @torch.no_grad()
         def _rollout(self, ex):
+            # On-policy sampling must come from the student; assert it self-sufficiently
+            # rather than rely on whatever adapter the previous step left active.
+            self.model.set_adapter(STUDENT_ADAPTER)
             prompt = tok.apply_chat_template(student_messages(ex), tokenize=False,
                                             add_generation_prompt=True)
             pids = tok(prompt, add_special_tokens=False).input_ids
-            device = next(self.model.parameters()).device
-            inp = torch.tensor([pids], device=device)
+            inp = torch.tensor([pids], device=next(self.model.parameters()).device)
             # use_cache is False during training; enable it for generation or each rollout
             # recomputes full attention per token (orders of magnitude slower).
             gen = self.model.generate(inp, max_new_tokens=cfg.max_new_tokens, do_sample=True,
                                       temperature=1.0, top_p=0.95, use_cache=True,
                                       pad_token_id=tok.pad_token_id)
-            cont_ids = gen[0, len(pids):].tolist()
-            return pids, cont_ids
+            return pids, gen[0, len(pids):].tolist()
 
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
-            device = next(model.parameters()).device
+            # Run rollout AND student scoring with dropout disabled (eval mode), so the
+            # optimized distribution matches the on-policy sampling distribution and the
+            # teacher targets. eval() disables LoRA dropout without blocking gradients.
+            was_training = model.training
+            model.eval()
             losses = []
-            for ex in inputs["batch"]:
-                s_pids, cont_ids = self._rollout(ex)
-                if not cont_ids:
-                    continue
-                demo = pick_demo(ex, train_pool, rng)
-                t_prompt = tok.apply_chat_template(teacher_messages(ex, demo), tokenize=False,
-                                                  add_generation_prompt=True)
-                t_pids = tok(t_prompt, add_special_tokens=False).input_ids
+            try:
+                for ex in inputs["batch"]:
+                    s_pids, cont_ids = self._rollout(ex)
+                    if not cont_ids:
+                        continue
+                    demo = pick_demo(ex, train_pool, rng)
+                    t_prompt = tok.apply_chat_template(teacher_messages(ex, demo), tokenize=False,
+                                                      add_generation_prompt=True)
+                    t_pids = tok(t_prompt, add_special_tokens=False).input_ids
 
-                s_logits = response_logits(model, s_pids, cont_ids)          # student adapter, grad
-                with torch.no_grad():
-                    was_training = model.training
-                    model.set_adapter(TEACHER_ADAPTER)                       # activate EMA teacher
-                    model.eval()                                             # deterministic targets (no dropout)
-                    t_logits = response_logits(model, t_pids, cont_ids)
-                    model.set_adapter(STUDENT_ADAPTER)                       # restore student
-                    if was_training:
-                        model.train()
-                n = min(s_logits.size(0), t_logits.size(0))
-                mask = torch.ones(1, n, device=device)
-                losses.append(analytic_token_kl(s_logits[:n].unsqueeze(0),
-                                                t_logits[:n].unsqueeze(0), mask))
-            loss = torch.stack(losses).mean() if losses else torch.zeros(1, device=device, requires_grad=True).sum()
-            wandb.log({"train/sdft_reverse_kl": loss.item()}, step=self.state.global_step)
+                    s_logits = response_logits(model, s_pids, cont_ids, cfg.max_len)  # grad flows
+                    try:
+                        model.set_adapter(TEACHER_ADAPTER)                # activate EMA teacher
+                        with torch.no_grad():
+                            t_logits = response_logits(model, t_pids, cont_ids, cfg.max_len)
+                    finally:
+                        model.set_adapter(STUDENT_ADAPTER)                # always restore student
+                    if s_logits is None or t_logits is None:
+                        warnings.warn(f"skipped example: continuation ({len(cont_ids)} toks) "
+                                      f"exceeds max_len={cfg.max_len}", stacklevel=2)
+                        continue
+                    mask = torch.ones(1, len(cont_ids), device=s_logits.device)
+                    losses.append(analytic_token_kl(s_logits.unsqueeze(0),
+                                                    t_logits.unsqueeze(0), mask))
+            finally:
+                if was_training:
+                    model.train()
+
+            if losses:
+                loss = torch.stack(losses).mean()
+            else:
+                log.warning("SDFT step %s produced no usable continuations; "
+                            "contributing zero gradient.", self.state.global_step)
+                # graph-connected zero so backward runs cleanly (zero grad, not a no-op leaf)
+                loss = sum(p.sum() for p in model.parameters() if p.requires_grad) * 0.0
+            self._last_kl = loss.item()
             return (loss, None) if return_outputs else loss
+
+        def log(self, logs, *args, **kwargs):
+            # Ride the Trainer's own monotonic step counter instead of a manual wandb.log,
+            # so the KL sits alongside loss/lr/eval without step-collision warnings.
+            if getattr(self, "_last_kl", None) is not None:
+                logs["train/sdft_reverse_kl"] = self._last_kl
+            return super().log(logs, *args, **kwargs)
 
     class EMACallback(TrainerCallback):
         def on_step_end(self, args, state, control, **kw):

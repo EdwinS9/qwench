@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qwench"
+version = "0.1.0"
+description = "Self-Distillation Fine-Tuning (SDFT) of Qwen3-8B for robot skill planning."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Edwin Sam" }]
+dependencies = [
+    "transformers>=4.51",
+    "trl>=0.12",
+    "peft",
+    "accelerate",
+    "datasets",
+    "wandb",
+    "torch",
+    "modal",
+]
+
+[project.optional-dependencies]
+serve = ["vllm==0.6.3"]            # gate.py rollouts
+maniskill = ["mani-skill>=3.0.0"]  # planned real executor (not yet wired)
+dev = ["ruff"]
+
+[tool.setuptools]
+# qwench/ is the library; training/ and eval/ are runnable entrypoint packages.
+packages = ["qwench", "training", "eval"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests prepend the repo root to sys.path before importing the package under test.
+"tests/*" = ["E402"]
