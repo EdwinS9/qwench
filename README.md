@@ -112,7 +112,7 @@ later *only if* Phase 2 shows the model is over-fitting template phrasing.
 |-------|-------------|--------|
 | 0 | Skill API JSON schemas | ✅ `schemas/` |
 | 1 | Templated data-gen → `(instruction, state) → gold plan` pairs, every plan executed & goal-verified. 800 examples in `data/` (`qwench/`, `python -m qwench.generate`). Uses a symbolic executor now; ManiSkill executor swaps into step 4 for the GPU pass. | ✅ (symbolic) |
-| 2 | **Teacher-beats-student gate** — base Qwen3-8B with/without demo on held-out set | ⬜ (go/no-go) |
+| 2 | **Teacher-beats-student gate** — base Qwen3-8B with/without demo on heldout (`modal run eval/gate.py`). Reports student vs teacher plan-success; passes if teacher leads by ≥15%. | ✅ built (run on Modal) |
 | 3 | SFT baseline + general-capability eval (measure forgetting) | ⬜ |
 | 4 | SDFT trainer — fork TRL `GKDTrainer`: student rollouts → student & teacher (EMA + demo-in-prompt) forward passes → analytic per-token reverse-KL → EMA update | ⬜ |
 | 5 | Compare SDFT vs SFT on (a) plan accuracy, (b) forgetting | ⬜ |
@@ -136,10 +136,17 @@ later *only if* Phase 2 shows the model is over-fitting template phrasing.
 ## Layout
 
 ```
-schemas/        Skill API + plan + scene-state JSON schemas (Phase 0)
-data/           (Phase 1) generated instruction→plan pairs + validator
-eval/           (Phase 2/5) teacher-beats-student gate + forgetting eval
-training/       (Phase 3/4) SFT baseline + SDFT (TRL GKDTrainer fork)
+schemas/        Skill API + plan + scene-state JSON schemas (Phase 0) ✅
+qwench/         data-gen + skills/world/grader + shared prompts (Phase 1) ✅
+data/           generated train/heldout JSONL (800 verified examples) ✅
+tests/          solve+verify, validator, grader-plumbing tests ✅
+eval/gate.py    Phase 2 teacher-beats-student gate (Modal) ✅
+training/       (Phase 3/4) SFT baseline + SDFT (TRL GKDTrainer fork) ⬜
 ```
 
-Nothing under `data/`, `eval/`, `training/` exists yet — this first pass is **plan + schemas only**.
+### Running the gate (Phase 2)
+```
+pip install modal && modal run eval/gate.py            # full heldout on Qwen3-8B
+modal run eval/gate.py --limit 32                       # quick smoke
+```
+Auth: profile `build-small-hackathon` is already active in `~/.modal.toml`.
