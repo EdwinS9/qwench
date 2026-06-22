@@ -52,11 +52,15 @@ def main() -> None:
         output_dir=CKPT, num_train_epochs=args.epochs,
         per_device_train_batch_size=2, gradient_accumulation_steps=4,
         learning_rate=args.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
-        logging_steps=1, bf16=True, max_length=2048, gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
+        logging_steps=1, bf16=True, max_length=2048,
         fsdp="full_shard auto_wrap",
         fsdp_config={"transformer_layer_cls_to_wrap": ["Qwen3DecoderLayer"],
-                     "activation_checkpointing": False},
+                     # gather a full (CPU, rank-0) state dict for save — the default
+                     # path was segfaulting on the gather; this is the supported config.
+                     "state_dict_type": "FULL_STATE_DICT",
+                     # use FSDP-native activation checkpointing, not gradient_checkpointing
+                     # (avoids the redundant all-gather + teardown crash).
+                     "activation_checkpointing": True},
         report_to=("wandb" if rank == 0 else "none"),
         save_strategy="no", remove_unused_columns=False,
     )

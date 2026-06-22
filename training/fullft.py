@@ -20,7 +20,8 @@ N_GPU = 4
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
-    .pip_install("transformers>=4.51", "trl>=1.0", "accelerate", "datasets", "wandb", "torch")
+    .pip_install("transformers>=4.51", "trl>=1.0", "peft", "accelerate",
+                 "datasets", "wandb", "torch")
     .add_local_dir(str(REPO / "qwench"), remote_path="/root/qwench")
     .add_local_dir(str(REPO / "schemas"), remote_path="/root/schemas")
     .add_local_dir(str(REPO / "training"), remote_path="/root/training")
