@@ -113,8 +113,8 @@ later *only if* Phase 2 shows the model is over-fitting template phrasing.
 | 0 | Skill API JSON schemas | ✅ `schemas/` |
 | 1 | Templated data-gen → `(instruction, state) → gold plan` pairs, every plan executed & goal-verified. 800 examples in `data/` (`qwench/`, `python -m qwench.generate`). Uses a symbolic executor now; ManiSkill executor swaps into step 4 for the GPU pass. | ✅ (symbolic) |
 | 2 | **Teacher-beats-student gate** — base Qwen3-8B with/without demo on heldout (`modal run eval/gate.py`). Reports student vs teacher plan-success; passes if teacher leads by ≥15%. | ✅ built (run on Modal) |
-| 3 | SFT baseline + general-capability eval (measure forgetting) | ⬜ |
-| 4 | SDFT trainer — fork TRL `GKDTrainer`: student rollouts → student & teacher (EMA + demo-in-prompt) forward passes → analytic per-token reverse-KL → EMA update | ⬜ |
+| 3 | SFT baseline (`modal run training/sft.py`), live W&B logging | ✅ built (run on Modal) |
+| 4 | SDFT trainer (`modal run training/sdft.py`): student rollouts → student & EMA-teacher (demo-in-prompt) forward passes → analytic per-token reverse-KL → EMA update | ✅ built (needs GPU validation) |
 | 5 | Compare SDFT vs SFT on (a) plan accuracy, (b) forgetting | ⬜ |
 
 ### Decisions locked in
@@ -141,7 +141,7 @@ qwench/         data-gen + skills/world/grader + shared prompts (Phase 1) ✅
 data/           generated train/heldout JSONL (800 verified examples) ✅
 tests/          solve+verify, validator, grader-plumbing tests ✅
 eval/gate.py    Phase 2 teacher-beats-student gate (Modal) ✅
-training/       (Phase 3/4) SFT baseline + SDFT (TRL GKDTrainer fork) ⬜
+training/       SFT baseline + SDFT trainer + shared eval/W&B scaffold (Phase 3/4) ✅
 ```
 
 ### Running the gate (Phase 2)
@@ -150,3 +150,32 @@ pip install modal && modal run eval/gate.py            # full heldout on Qwen3-8
 modal run eval/gate.py --limit 32                       # quick smoke
 ```
 Auth: profile `build-small-hackathon` is already active in `~/.modal.toml`.
+
+### Live training dashboard (Phases 3–4)
+
+Training streams to **Weights & Biases** in realtime; both SFT and SDFT log to the
+same project (`qwench-sdft`) so their curves overlay. One-time setup:
+
+```
+modal secret create wandb-secret WANDB_API_KEY=<your-wandb-key>
+```
+
+Launch (each prints a W&B run URL to watch from the browser):
+```
+modal run training/sft.py  --limit 128 --epochs 1     # smoke the SFT baseline
+modal run training/sdft.py --limit 128 --epochs 1     # smoke SDFT (first GPU validation)
+modal run training/sft.py                              # full baseline
+modal run training/sdft.py                             # full SDFT
+```
+
+Logged in realtime:
+- **Core**: training loss (SDFT reverse-KL), LR, grad-norm, tokens/sec (HF/W&B).
+- **Teacher–student KL gap** — the paper's health signal; SDFT should shrink it.
+- **Plan-success %** on a heldout slice every `eval_steps`, with failure-stage breakdown.
+- **Sample generations** — a live table of student plans + pass/fail per eval.
+
+Defaults to **LoRA** (student + EMA teacher fit one 80GB GPU); set `use_lora=False` in
+`training/common.py:TrainConfig` for full fine-tuning (needs more GPU).
+
+> The SDFT trainer's first Modal run *is* its integration test — start with the
+> `--limit 128 --epochs 1` smoke and watch the loss/KL-gap curves before a full run.
