@@ -37,10 +37,13 @@ image = (
 
 app = modal.App("qwench-sdft", image=image)
 hf_cache = modal.Volume.from_name("qwench-hf-cache", create_if_missing=True)
+# Persists trained adapters across runs (the previous run saved nothing and was lost).
+ckpts = modal.Volume.from_name("qwench-checkpoints", create_if_missing=True)
+CKPT_DIR = "/root/checkpoints"
 
 
 @app.function(gpu="A100-80GB", timeout=6 * 60 * 60,
-              volumes={"/root/.cache/huggingface": hf_cache},
+              volumes={"/root/.cache/huggingface": hf_cache, CKPT_DIR: ckpts},
               secrets=[modal.Secret.from_name("wandb-secret")])
 def train(limit: int, epochs: int, lr: float, ema_alpha: float):
     import logging
@@ -172,21 +175,32 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
     def collate(features):
         return {"batch": features}
 
+    best_dir = f"{CKPT_DIR}/sdft-best"
     args = TrainingArguments(
-        output_dir="/root/checkpoints/sdft", num_train_epochs=cfg.epochs,
+        output_dir=f"{CKPT_DIR}/sdft", num_train_epochs=cfg.epochs,
         per_device_train_batch_size=cfg.batch_size, gradient_accumulation_steps=cfg.grad_accum,
         learning_rate=cfg.lr, lr_scheduler_type="cosine", warmup_ratio=0.03,
         logging_steps=1, bf16=True, report_to="wandb", run_name=cfg.run_name,
-        save_strategy="no", remove_unused_columns=False,
+        save_strategy="no", remove_unused_columns=False,  # we save the best adapter ourselves
     )
+    # Save the STUDENT adapter whenever heldout plan-success hits a new best (strict >),
+    # so we keep the earliest, least-over-trained checkpoint at peak performance.
     trainer = SDFTTrainer(
         model=model, args=args, data_collator=collate,
         train_dataset=train_rows,  # plain list of example dicts; collate() batches them
         callbacks=[EMACallback(),
-                   PlanEvalCallback(tok, heldout[:cfg.eval_examples], train_pool, cfg)],
+                   PlanEvalCallback(tok, heldout[:cfg.eval_examples], train_pool, cfg,
+                                    save_dir=best_dir, save_adapter=STUDENT_ADAPTER)],
     )
     trainer.train()
+
+    # Always also save the final adapter, then persist the volume.
+    model.set_adapter(STUDENT_ADAPTER)
+    model.save_pretrained(f"{CKPT_DIR}/sdft-final", selected_adapters=[STUDENT_ADAPTER])
+    tok.save_pretrained(f"{CKPT_DIR}/sdft-final")
+    ckpts.commit()
     print(f"W&B run: {wandb.run.url}")
+    print("adapters saved to Modal volume qwench-checkpoints: sdft-best/ and sdft-final/")
     wandb.finish()
 
 

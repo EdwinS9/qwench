@@ -273,15 +273,23 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
 
 
 class PlanEvalCallback(TrainerCallback):
-    """Every cfg.eval_steps, log plan-success / KL-gap / sample generations to W&B."""
+    """Every cfg.eval_steps, log plan-success / KL-gap / sample generations to W&B.
 
-    def __init__(self, tok, eval_examples, train_pool, cfg: TrainConfig):
+    If `save_dir` is given, saves the adapter whenever heldout plan-success reaches a new
+    best (strict improvement), keeping the earliest peak checkpoint (least over-trained).
+    """
+
+    def __init__(self, tok, eval_examples, train_pool, cfg: TrainConfig,
+                 save_dir: str | None = None, save_adapter: str | None = None):
         import random
         self.tok = tok
         self.eval_examples = eval_examples
         self.train_pool = train_pool
         self.cfg = cfg
         self.rng = random.Random(cfg.seed)
+        self.save_dir = save_dir
+        self.save_adapter = save_adapter
+        self.best = -1.0
 
     def on_step_end(self, args, state, control, model=None, **kw):
         if state.global_step == 0 or state.global_step % self.cfg.eval_steps != 0:
@@ -294,3 +302,9 @@ class PlanEvalCallback(TrainerCallback):
             data=[[step, *row] for row in samples],
         )
         wandb.log({**metrics, "eval/samples": table}, step=step)
+
+        if self.save_dir and metrics["eval/plan_success"] > self.best:
+            self.best = metrics["eval/plan_success"]
+            kw_save = {"selected_adapters": [self.save_adapter]} if self.save_adapter else {}
+            model.save_pretrained(self.save_dir, **kw_save)
+            wandb.log({"eval/best_plan_success": self.best}, step=step)
