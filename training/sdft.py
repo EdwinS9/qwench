@@ -62,6 +62,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
         PlanEvalCallback,
         TrainConfig,
         add_ema_teacher_adapter,
+        define_wandb_metrics,
         load_examples,
         load_model,
         load_tokenizer,
@@ -73,6 +74,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
                       run_name="sdft", batch_size=4)
     wandb.init(project=cfg.wandb_project, name=cfg.run_name, config=cfg.__dict__,
                tags=["sdft"])
+    define_wandb_metrics()
 
     tok = load_tokenizer(cfg.model)
     train_rows = load_examples("train")
@@ -112,7 +114,8 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
             # teacher targets. eval() disables LoRA dropout without blocking gradients.
             was_training = model.training
             model.eval()
-            losses = []
+            losses, cont_lens = [], []
+            n_batch = len(inputs["batch"])
             try:
                 for ex in inputs["batch"]:
                     s_pids, cont_ids = self._rollout(ex)
@@ -137,6 +140,7 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
                     mask = torch.ones(1, len(cont_ids), device=s_logits.device)
                     losses.append(analytic_token_kl(s_logits.unsqueeze(0),
                                                     t_logits.unsqueeze(0), mask))
+                    cont_lens.append(len(cont_ids))
             finally:
                 if was_training:
                     model.train()
@@ -149,13 +153,19 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
                 # graph-connected zero so backward runs cleanly (zero grad, not a no-op leaf)
                 loss = sum(p.sum() for p in model.parameters() if p.requires_grad) * 0.0
             self._last_kl = loss.item()
+            # Cheap per-step diagnostics so the dashboard has smooth curves between evals.
+            self._step_metrics = {
+                "rollout/usable_frac": len(losses) / max(n_batch, 1),
+                "rollout/cont_len_mean": (sum(cont_lens) / len(cont_lens)) if cont_lens else 0.0,
+            }
             return (loss, None) if return_outputs else loss
 
         def log(self, logs, *args, **kwargs):
             # Ride the Trainer's own monotonic step counter instead of a manual wandb.log,
-            # so the KL sits alongside loss/lr/eval without step-collision warnings.
+            # so these sit alongside loss/lr/eval without step-collision warnings.
             if getattr(self, "_last_kl", None) is not None:
                 logs["train/sdft_reverse_kl"] = self._last_kl
+            logs.update(getattr(self, "_step_metrics", {}))
             return super().log(logs, *args, **kwargs)
 
     class EMACallback(TrainerCallback):

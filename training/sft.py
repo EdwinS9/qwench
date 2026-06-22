@@ -47,6 +47,7 @@ def train(limit: int, epochs: int, lr: float):
     from training.common import (
         PlanEvalCallback,
         TrainConfig,
+        define_wandb_metrics,
         load_examples,
         load_model,
         load_tokenizer,
@@ -56,6 +57,7 @@ def train(limit: int, epochs: int, lr: float):
     cfg = TrainConfig(method="sft", epochs=epochs, lr=lr, run_name="sft-baseline")
     wandb.init(project=cfg.wandb_project, name=cfg.run_name, config=cfg.__dict__,
                tags=["sft", "baseline"])
+    define_wandb_metrics()
 
     tok = load_tokenizer(cfg.model)
     train_rows = load_examples("train")

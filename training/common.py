@@ -187,13 +187,32 @@ def _gold_continuation_kl_gap(model, tok, examples, train_pool, rng, max_len):
     return sum(gaps) / max(len(gaps), 1)
 
 
+def define_wandb_metrics():
+    """Tidy the W&B dashboard: track best/last per panel and group by prefix.
+
+    Metric prefixes (`train/`, `eval/`, `eval/success/`, `eval/fail/`, `rollout/`) render
+    as collapsible sections; the summaries surface the headline numbers in the run table.
+    """
+    wandb.define_metric("eval/plan_success", summary="max")
+    wandb.define_metric("eval/teacher_student_kl_gap", summary="min")
+    wandb.define_metric("eval/success/*", summary="max")
+    wandb.define_metric("train/sdft_reverse_kl", summary="min")
+
+
 @torch.no_grad()
 def evaluate(model, tok, examples, train_pool, cfg, rng):
-    """Generate plans on a heldout slice, grade them, and gather sample rows."""
+    """Generate plans on a heldout slice, grade them, and gather sample rows.
+
+    Returns (metrics, samples). Metrics include the aggregate plan-success, a per-family
+    breakdown (`eval/success/<family>`), the failure-stage mix (`eval/fail/<stage>`), and
+    the teacher-student KL gap.
+    """
     from collections import Counter
 
     device = next(model.parameters()).device
-    succ, stages, samples = 0, Counter(), []
+    succ, stages = 0, Counter()
+    fam_succ, fam_total = Counter(), Counter()
+    samples = []
     model.eval()
     for i, ex in enumerate(examples):
         prompt = tok.apply_chat_template(
@@ -204,18 +223,22 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
                              use_cache=True, pad_token_id=tok.pad_token_id)
         text = tok.decode(gen[0, ids.input_ids.size(1):], skip_special_tokens=True)
         v = grade(ex, text)
+        fam = ex["task_family"]
         succ += int(v["success"])
         stages[v["stage"]] += 1
+        fam_total[fam] += 1
+        fam_succ[fam] += int(v["success"])
         if i < cfg.n_samples_logged:
-            samples.append([ex["task_family"], ex["instruction"], text[:600],
-                            v["success"], v["stage"]])
+            samples.append([fam, ex["instruction"], text[:600], v["success"], v["stage"]])
     kl_gap = _gold_continuation_kl_gap(model, tok, examples[:cfg.n_samples_logged * 4],
                                        train_pool, rng, cfg.max_len)
     model.train()
+    n = len(examples)
     return {
-        "eval/plan_success": succ / len(examples),
+        "eval/plan_success": succ / n,
         "eval/teacher_student_kl_gap": kl_gap,
-        **{f"eval/fail_{k}": c / len(examples) for k, c in stages.items() if k != "ok"},
+        **{f"eval/success/{fam}": fam_succ[fam] / fam_total[fam] for fam in sorted(fam_total)},
+        **{f"eval/fail/{k}": c / n for k, c in stages.items() if k != "ok"},
     }, samples
 
 
@@ -235,6 +258,9 @@ class PlanEvalCallback(TrainerCallback):
             return
         metrics, samples = evaluate(model, self.tok, self.eval_examples, self.train_pool,
                                     self.cfg, self.rng)
-        table = wandb.Table(columns=["family", "instruction", "generated_plan", "success", "stage"],
-                            data=samples)
-        wandb.log({**metrics, "eval/samples": table}, step=state.global_step)
+        step = state.global_step
+        table = wandb.Table(
+            columns=["step", "family", "instruction", "generated_plan", "success", "stage"],
+            data=[[step, *row] for row in samples],
+        )
+        wandb.log({**metrics, "eval/samples": table}, step=step)

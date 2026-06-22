@@ -77,9 +77,18 @@ modal run training/sft.py
 modal run training/sdft.py
 ```
 
-Logged in realtime: training loss (SDFT reverse-KL), LR, grad-norm; the teacher–student
-KL gap (the paper's health signal, expected to shrink under SDFT); plan-success % on a
-heldout slice with a failure-stage breakdown; and a table of sample generations.
+Logged in realtime, grouped into dashboard sections by prefix:
+
+- `train/` — loss (SDFT reverse-KL), LR, grad-norm, every step.
+- `rollout/` — per-step SDFT diagnostics: usable-example fraction and mean continuation
+  length, so the curves stay smooth between the (costlier) evals.
+- `eval/` — every `eval_steps`: aggregate `plan_success`, the teacher–student KL gap
+  (the paper's health signal, expected to shrink under SDFT), a per-family success
+  breakdown (`eval/success/<family>`), a failure-stage mix (`eval/fail/<stage>`), and a
+  `samples` table of generated plans (with a step column to scrub over time).
+
+`define_wandb_metrics()` marks `plan_success`/`success/*` as `max` and the KL metrics as
+`min`, so the run table surfaces best values automatically.
 
 ## Compute
 
