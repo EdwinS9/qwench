@@ -42,7 +42,7 @@ hf_cache = modal.Volume.from_name("qwench-hf-cache", create_if_missing=True)
 PASS_MARGIN = 0.15  # teacher must beat student by at least this absolute success-rate gap
 
 
-@app.function(gpu="H100", timeout=60 * 60, volumes={"/root/.cache/huggingface": hf_cache})
+@app.function(gpu="A100-80GB", timeout=60 * 60, volumes={"/root/.cache/huggingface": hf_cache})
 def run_gate(model: str, heldout: list[dict], train: list[dict], limit: int | None):
     import random
     import sys

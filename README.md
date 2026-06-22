@@ -183,3 +183,8 @@ Defaults to **LoRA** (student + EMA teacher fit one 80GB GPU); set `use_lora=Fal
 
 > The SDFT trainer's first Modal run *is* its integration test — start with the
 > `--limit 128 --epochs 1` smoke and watch the loss/KL-gap curves before a full run.
+
+**GPU:** defaults to `A100-80GB` (cheaper than H100, fits SDFT's two 8B copies with
+room to spare; a full LoRA run is well under 5h). Override per run with `--gpu`, e.g.
+`modal run training/sft.py --gpu L40S`. SDFT wants ≥48GB because it holds the student
+*and* the EMA teacher; SFT holds one model so 40GB-class GPUs (A100-40GB, L40S) work.

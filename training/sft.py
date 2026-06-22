@@ -34,7 +34,7 @@ app = modal.App("qwench-sft", image=image)
 hf_cache = modal.Volume.from_name("qwench-hf-cache", create_if_missing=True)
 
 
-@app.function(gpu="H100", timeout=4 * 60 * 60,
+@app.function(gpu="A100-80GB", timeout=4 * 60 * 60,
               volumes={"/root/.cache/huggingface": hf_cache},
               secrets=[modal.Secret.from_name("wandb-secret")])
 def train(limit: int, epochs: int, lr: float):
@@ -77,5 +77,7 @@ def train(limit: int, epochs: int, lr: float):
 
 
 @app.local_entrypoint()
-def main(limit: int = 0, epochs: int = 2, lr: float = 1e-5):
-    train.remote(limit, epochs, lr)
+def main(limit: int = 0, epochs: int = 2, lr: float = 1e-5, gpu: str = ""):
+    # --gpu overrides the default (A100-80GB); SFT holds one model so 40GB-class works too.
+    fn = train.with_options(gpu=gpu) if gpu else train
+    fn.remote(limit, epochs, lr)
