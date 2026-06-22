@@ -71,11 +71,13 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
     model = load_model(cfg)
     # EMA teacher = a second frozen LoRA adapter on the SAME base (no full model copy).
     add_ema_teacher_adapter(model, cfg)
-    device = next(model.parameters()).device
     rng = random.Random(cfg.seed)
 
     def response_logits(m, prompt_ids, cont_ids):
         """Logits predicting each continuation token, given a prompt."""
+        # Read the live device: the Trainer moves the model to GPU only at train() time,
+        # so the device must NOT be captured at setup (it would still be 'cpu' there).
+        device = next(m.parameters()).device
         ids = torch.tensor([prompt_ids + cont_ids], device=device)[:, :cfg.max_len]
         logits = m(ids).logits[0]
         start = len(prompt_ids) - 1
@@ -90,13 +92,18 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
             prompt = tok.apply_chat_template(student_messages(ex), tokenize=False,
                                             add_generation_prompt=True)
             pids = tok(prompt, add_special_tokens=False).input_ids
+            device = next(self.model.parameters()).device
             inp = torch.tensor([pids], device=device)
+            # use_cache is False during training; enable it for generation or each rollout
+            # recomputes full attention per token (orders of magnitude slower).
             gen = self.model.generate(inp, max_new_tokens=cfg.max_new_tokens, do_sample=True,
-                                      temperature=1.0, top_p=0.95, pad_token_id=tok.pad_token_id)
+                                      temperature=1.0, top_p=0.95, use_cache=True,
+                                      pad_token_id=tok.pad_token_id)
             cont_ids = gen[0, len(pids):].tolist()
             return pids, cont_ids
 
         def compute_loss(self, model, inputs, return_outputs=False, **kw):
+            device = next(model.parameters()).device
             losses = []
             for ex in inputs["batch"]:
                 s_pids, cont_ids = self._rollout(ex)
@@ -109,9 +116,13 @@ def train(limit: int, epochs: int, lr: float, ema_alpha: float):
 
                 s_logits = response_logits(model, s_pids, cont_ids)          # student adapter, grad
                 with torch.no_grad():
+                    was_training = model.training
                     model.set_adapter(TEACHER_ADAPTER)                       # activate EMA teacher
+                    model.eval()                                             # deterministic targets (no dropout)
                     t_logits = response_logits(model, t_pids, cont_ids)
                     model.set_adapter(STUDENT_ADAPTER)                       # restore student
+                    if was_training:
+                        model.train()
                 n = min(s_logits.size(0), t_logits.size(0))
                 mask = torch.ones(1, n, device=device)
                 losses.append(analytic_token_kl(s_logits[:n].unsqueeze(0),

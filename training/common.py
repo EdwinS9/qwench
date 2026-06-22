@@ -180,7 +180,7 @@ def evaluate(model, tok, examples, train_pool, cfg, rng):
         prompt = tok.apply_chat_template(student_messages(ex), tokenize=False, add_generation_prompt=True)
         ids = tok(prompt, return_tensors="pt", add_special_tokens=False).to(device)
         gen = model.generate(**ids, max_new_tokens=cfg.max_new_tokens, do_sample=False,
-                             pad_token_id=tok.pad_token_id)
+                             use_cache=True, pad_token_id=tok.pad_token_id)
         text = tok.decode(gen[0, ids.input_ids.size(1):], skip_special_tokens=True)
         v = grade(ex, text)
         succ += int(v["success"])
