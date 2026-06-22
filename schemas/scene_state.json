@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qwench/schemas/scene_state.json",
+  "title": "Scene State",
+  "description": "Symbolic, text-serializable snapshot of a ManiSkill scene, given to the planner as the observable world state alongside the instruction. Produced by a state extractor that reads ManiSkill's ground-truth object poses and articulation states. This is the 'x' (query context) the model conditions on; it never sees raw pixels or joint values.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["objects", "robot"],
+  "properties": {
+    "objects": {
+      "type": "array",
+      "description": "All task-relevant entities currently in the scene.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique handle used in skill args, e.g. 'red_cube'." },
+          "type": {
+            "type": "string",
+            "enum": ["graspable", "receptacle", "articulated", "surface", "location"],
+            "description": "Category that constrains which skills are valid on it."
+          },
+          "at": { "type": "string", "description": "Id of the surface/receptacle this object currently rests on/in, if any." },
+          "articulation": {
+            "type": "string",
+            "enum": ["open", "closed"],
+            "description": "Present only for articulated objects."
+          },
+          "reachable": { "type": "boolean", "description": "Whether the object is within manipulation range from the robot's current base pose." }
+        }
+      }
+    },
+    "robot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_at", "gripper"],
+      "properties": {
+        "base_at": { "type": "string", "description": "Named location/object the robot base is currently near." },
+        "gripper": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["holding"],
+          "properties": {
+            "holding": {
+              "type": ["string", "null"],
+              "description": "Id of the object currently grasped, or null if the gripper is empty."
+            }
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "objects": [
+        { "id": "red_cube", "type": "graspable", "at": "counter", "reachable": false },
+        { "id": "bin", "type": "receptacle", "at": "floor", "reachable": false },
+        { "id": "counter", "type": "surface" },
+        { "id": "drawer", "type": "articulated", "articulation": "closed", "reachable": true }
+      ],
+      "robot": { "base_at": "counter", "gripper": { "holding": null } }
+    }
+  ]
+}

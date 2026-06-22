@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qwench/schemas/plan.json",
+  "title": "Robot Skill Plan",
+  "description": "The planner's output: a chain-of-thought rationale plus an ordered list of skill calls. The validator checks (1) JSON parses, (2) every step.skill is in schemas/skills.json, (3) args satisfy that skill's parameter schema, (4) the last step is 'done'. Sim execution then checks the goal condition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan"],
+  "properties": {
+    "thinking": {
+      "type": "string",
+      "description": "Free-text reasoning produced before the plan. SDFT distills the teacher's reasoning+plan, so this field is kept (paper template asks for 'the thinking process')."
+    },
+    "plan": {
+      "type": "array",
+      "description": "Ordered skill calls to execute. Must end with a 'done' step.",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill", "args"],
+        "properties": {
+          "skill": {
+            "type": "string",
+            "description": "Name of a skill defined in schemas/skills.json.",
+            "enum": [
+              "navigate_to",
+              "pick",
+              "place",
+              "open",
+              "close",
+              "push",
+              "detect",
+              "done"
+            ]
+          },
+          "args": {
+            "type": "object",
+            "description": "Arguments for the skill; validated against that skill's parameter schema."
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "thinking": "The red cube is on the counter and needs to go in the bin. Approach the cube, grasp it, then move to the bin and drop it in.",
+      "plan": [
+        { "skill": "navigate_to", "args": { "target": "red_cube" } },
+        { "skill": "pick", "args": { "object": "red_cube" } },
+        { "skill": "navigate_to", "args": { "target": "bin" } },
+        { "skill": "place", "args": { "target": "bin", "relation": "in" } },
+        { "skill": "done", "args": {} }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "qwench/schemas/skills.json",
+  "title": "Robot Skill API",
+  "description": "Fixed set of high-level skill primitives the Qwen3-4B planner may call. Each skill maps to a ManiSkill controller (scripted or learned) at execution time. The planner emits a sequence of these calls; it never produces low-level actions (joint torques/poses).",
+  "skills": [
+    {
+      "name": "navigate_to",
+      "description": "Move the robot base so the target object or named location is within manipulation range.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Object id or named location to approach, e.g. 'counter', 'red_cube', 'sink'."
+          }
+        }
+      }
+    },
+    {
+      "name": "pick",
+      "description": "Grasp and lift a graspable object. Requires the object to be reachable and the gripper to be empty.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Object id to grasp, e.g. 'red_cube'."
+          }
+        }
+      }
+    },
+    {
+      "name": "place",
+      "description": "Place the currently held object onto/into a target receptacle or location. Requires the gripper to be holding something.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Receptacle or location id to place on/in, e.g. 'plate', 'bin', 'counter'."
+          },
+          "relation": {
+            "type": "string",
+            "enum": ["on", "in"],
+            "default": "on",
+            "description": "Spatial relation of the placed object to the target."
+          }
+        }
+      }
+    },
+    {
+      "name": "open",
+      "description": "Open an articulated object (drawer, door, cabinet, lid).",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Articulated object id to open, e.g. 'drawer', 'cabinet_door'."
+          }
+        }
+      }
+    },
+    {
+      "name": "close",
+      "description": "Close an articulated object (drawer, door, cabinet, lid).",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object"],
+        "properties": {
+          "object": {
+            "type": "string",
+            "description": "Articulated object id to close."
+          }
+        }
+      }
+    },
+    {
+      "name": "push",
+      "description": "Push an object across a surface toward a target location without grasping it.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object", "target"],
+        "properties": {
+          "object": { "type": "string", "description": "Object id to push." },
+          "target": { "type": "string", "description": "Destination location id." }
+        }
+      }
+    },
+    {
+      "name": "detect",
+      "description": "Perception query: confirm an object's presence/location and refresh scene state before acting. No physical effect.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object"],
+        "properties": {
+          "object": { "type": "string", "description": "Object id to localize." }
+        }
+      }
+    },
+    {
+      "name": "done",
+      "description": "Terminal skill. Emit when the instruction's goal condition is believed satisfied. Must be the last call in a plan.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    }
+  ]
+}
