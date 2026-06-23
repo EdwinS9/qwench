@@ -96,13 +96,12 @@ def run(model_name: str, epochs: int, lr: float, mmlu_n: int, eval_n: int):
     ds = Dataset.from_list([to_prompt_completion(tok, r) for r in train_rows])
     sft_cfg = SFTConfig(
         output_dir="/root/ckpt", num_train_epochs=cfg.epochs,
-        # 8-bit paged AdamW + grad checkpointing -> full-FT 8B fits one 80GB GPU.
-        # per_device 2 x grad_accum 2 = effective batch 4 (matches steps_per_epoch).
-        per_device_train_batch_size=2, gradient_accumulation_steps=2,
-        optim="paged_adamw_8bit",
+        # Proven 4B full-FT config (same as the premise run that ran cleanly): normal
+        # AdamW + grad checkpointing, batch 4. No 8-bit optimizer — that combo is what
+        # hung the 8B run. 4B full-FT (~48GB) fits one 80GB GPU comfortably.
+        per_device_train_batch_size=cfg.batch_size, gradient_accumulation_steps=1,
         learning_rate=cfg.lr, lr_scheduler_type="constant", warmup_ratio=0.0,
         logging_steps=10, bf16=True, max_length=cfg.max_len, gradient_checkpointing=True,
-        gradient_checkpointing_kwargs={"use_reentrant": False},
         report_to="wandb", run_name="forget-sweep", save_strategy="no",
         remove_unused_columns=False,
     )
@@ -125,6 +124,6 @@ def run(model_name: str, epochs: int, lr: float, mmlu_n: int, eval_n: int):
 
 
 @app.local_entrypoint()
-def main(model_name: str = "Qwen/Qwen3-8B", epochs: int = 30, lr: float = 5e-5,
+def main(model_name: str = "Qwen/Qwen3-4B", epochs: int = 30, lr: float = 5e-5,
          mmlu_n: int = 200, eval_n: int = 48):
     print(run.remote(model_name, epochs, lr, mmlu_n, eval_n))
