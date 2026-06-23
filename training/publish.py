@@ -89,11 +89,9 @@ Graded by a **symbolic world-model executor** (parse → schema → execution �
 - **MMLU (general capability): ≈0.71**, statistically unchanged from base Qwen3-8B (≈0.71) —
   i.e. **no measurable forgetting** under this LoRA setup (see caveat below).
 
-> **Correction / honesty note.** An earlier version of this card reported "100% plan-success."
-> That figure was measured on the **64-example subset used for in-training eval**, which is
-> easier than the full split; on the full 132-example held-out the same checkpoint scores ~61%.
-> The checkpoint is also early (saved at the first in-training peak), so it under-fits the harder
-> task families (e.g. multi-step stacking).
+The full 132-example split is the headline number; the 64-example in-training eval subset is
+easier and scores higher. This checkpoint is saved early (at the first in-training peak), so it
+under-fits the harder task families such as multi-step stacking, where most failures land.
 
 ## Limitations (read before relying on this)
 
