@@ -16,12 +16,27 @@ IMAGE="runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04"
 KEY="$HOME/.runpod/ssh/runpodctl-ssh-key"
 STOP_AT=$(date -u -v+3H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "+3 hours" +%Y-%m-%dT%H:%M:%SZ)
 
-cleanup() {  # ALWAYS terminate the pod, even on error / Ctrl-C
+RUN_TS=$(date +%Y%m%d-%H%M%S)
+SAVE_DIR="runs/$RUN_TS"
+
+cleanup() {  # ALWAYS save results, THEN terminate the pod — even on error / Ctrl-C
     if [ -n "${POD_ID:-}" ]; then
+        # 1. SAVE before destroying: pull the run log + any saved adapter back to runs/
+        if [ -n "${IP:-}" ] && [ -n "${PORT:-}" ]; then
+            mkdir -p "$SAVE_DIR"
+            echo ">>> saving results to $SAVE_DIR/ before teardown"
+            scp -o StrictHostKeyChecking=no -i "$KEY" -P "$PORT" \
+                root@"$IP":/workspace/run.log "$SAVE_DIR/run.log" 2>/dev/null \
+                && echo "    saved run.log" || echo "    (no run.log to save)"
+            # pull any saved adapter dir (small for LoRA; full-FT models are skipped on the pod)
+            scp -r -o StrictHostKeyChecking=no -i "$KEY" -P "$PORT" \
+                root@"$IP":/workspace/qwench/out "$SAVE_DIR/out" 2>/dev/null \
+                && echo "    saved out/" || true
+        fi
+        # 2. teardown
         echo ">>> terminating pod $POD_ID"
         runpodctl pod remove "$POD_ID" 2>&1 | head -2 || true
-        echo ">>> verify (should be empty / \$0):"
-        runpodctl pod list 2>&1 | tr -d '\r' | head -3
+        echo ">>> verify (should be empty):"; runpodctl pod list 2>&1 | tr -d '\r' | head -3
     fi
 }
 trap cleanup EXIT INT TERM
@@ -67,7 +82,8 @@ ln -sf /workspace/qwench/data /root/data
 pip install --quiet 'transformers>=4.51' 'trl>=1.0' peft accelerate datasets wandb bitsandbytes modal 2>&1 | tail -1
 cd /workspace/qwench
 export PYTHONPATH=/workspace/qwench WANDB_API_KEY='$WANDB_KEY' HF_TOKEN='$HF_KEY' TOKENIZERS_PARALLELISM=false
-$CMD
-echo TRAINING_COMPLETE
+# tee to /workspace/run.log so cleanup() can save it back before teardown
+$CMD 2>&1 | tee /workspace/run.log
+echo TRAINING_COMPLETE | tee -a /workspace/run.log
 "
-echo ">>> training finished — pod will be terminated by the EXIT trap"
+echo ">>> training finished — results saved to $SAVE_DIR/, pod terminated by the EXIT trap"

@@ -19,3 +19,7 @@ wandb/
 htmlcov/
 # macOS
 .DS_Store
+
+# RunPod run artifacts (logs/checkpoints pulled back); keep the curated results md
+runs/*/run.log
+runs/*/out/
