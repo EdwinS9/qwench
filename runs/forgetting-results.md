@@ -22,7 +22,7 @@ unless noted); plan-success = symbolic-grader held-out.
 
 ## 4. H2H (4B, lr=5e-5, full-FT, 30 epochs) — SFT forgets, SDFT COLLAPSED
 - base mmlu 0.690, plan 0.30
-- **SFT**: mmlu 0.485 (−0.205), plan 0.985 — forgot ~20 pts, kept the task. ✓
+- **SFT**: mmlu 0.485 (−0.205), plan 0.985 — forgot ~20 pts, kept the task.
 - **SDFT**: held mmlu ~0.62 / plan ~0.44 for epochs 1–4, then **diverged at epoch 5**
   → mmlu 0.29 (≈ random), plan 0.00. Training instability, NOT a real finding.
 - Diagnosis: self-referential reverse-KL target (teacher = student's own EMA) with no

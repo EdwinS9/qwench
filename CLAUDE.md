@@ -1,10 +1,9 @@
 # qwench — agent instructions
 
-## ⚠️ ALWAYS stop GPU pods after a run finishes
+## ALWAYS stop GPU pods after a run finishes
 
 Cloud GPUs bill **per hour while running** — an idle pod left up after training silently
-drains the balance. (This already cost ~€50: a pod sat idle for ~1.5 days after a 2.5h run
-because it wasn't stopped.)
+drains the balance.
 
 **Rule:** the moment a training/eval run completes (or fails, or you've pulled the results),
 **terminate the pod immediately.**
@@ -26,3 +25,14 @@ skill planning. Code map is in `README.md`; reproduction details + decisions in 
   SSH key `~/.runpod/ssh/runpodctl-ssh-key`.
 - Prefer cheaper GPUs sized to the job: full-FT 4B needs ~48GB (A40/A6000 ≈ $0.5/hr),
   not A100-80GB ($1.49/hr). LoRA/eval fit a 24GB card (RTX 4090).
+
+## Commit message policy
+
+- Commit messages must be **technical only**: what changed, why, and any relevant context
+  about the code or experiment.
+- Never include: personal anecdotes, money spent, mistakes made, operational blunders,
+  self-deprecation, or any non-technical narrative.
+- Never add `Co-Authored-By`, `Signed-off-by`, or similar trailers — especially nothing
+  that references Claude, Anthropic, or any AI model.
+- Keep messages professional and self-contained: a stranger reading the repo should see
+  a clean engineering log, not a diary.

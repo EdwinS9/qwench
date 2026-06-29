@@ -5,7 +5,6 @@
 #
 # Defaults to a cheap A40 (48GB, ~$0.50/hr) — enough for full-FT 4B, ~⅓ the A100 cost.
 # Sets a hard --stop-after backstop AND removes the pod when training finishes.
-# (See CLAUDE.md: never leave a pod running. A forgotten pod once cost ~€50.)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

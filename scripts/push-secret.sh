@@ -16,4 +16,4 @@ args=(WANDB_API_KEY="$WANDB_API_KEY")
 [ -n "${HF_TOKEN:-}" ] && args+=(HF_TOKEN="$HF_TOKEN")
 
 modal secret create wandb-secret "${args[@]}" --force
-echo "✅ pushed wandb-secret to Modal"
+echo "pushed wandb-secret to Modal"
